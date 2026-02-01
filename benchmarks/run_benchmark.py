@@ -10,7 +10,7 @@ from cubed_sphere.solvers import CubedSphereAdvectionSolver, AdvectionConfig
 
 def run_benchmark_suite():
     # 增加 128 以展示 GPU 優勢
-    n_values = [32, 64, 128]
+    n_values = [32, 64, 128, 256]
     results = []
 
     print("========================================")
