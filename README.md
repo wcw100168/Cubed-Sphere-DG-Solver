@@ -15,7 +15,7 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion eq
 
 ## Theoretical Background
 
-For a detailed explanation of the mathematical formulation, including the Discontinuous Galerkin method, weak form derivation, and Cubed Sphere geometry metrics, please refer to the [Theoretical Background](docs/THEORY.md).
+For a detailed explanation of the mathematical formulation, including the Discontinuous Galerkin method, weak form derivation, and Cubed Sphere geometry metrics, please refer to the [Theoretical Background](docs/Theoretical_Background.md).
 
 *(Note: Theory documentation is currently in progress)*
 
