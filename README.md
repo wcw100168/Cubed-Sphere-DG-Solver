@@ -109,11 +109,19 @@ config = AdvectionConfig(..., backend='jax')
 
 ## Testing & Benchmarks
 
-To verify numerical precision (Mass Conservation ~1e-12):
+### Numerical Accuracy
+
+The solver demonstrates **spectral convergence**, with $L_2$ errors decreasing exponentially as $N$ increases. Under optimal CFL conditions, the solution accuracy reaches approximately **1e-12** (close to machine precision).
+
+Detailed convergence tables for varying CFL numbers (0.5, 1.0, 2.0) can be found in the [Accuracy Report](docs/ACCURACY_REPORT.md).
+
+To verify these results or run unit tests:
 
 ```bash
 python -m unittest discover tests
 ```
+
+### Performance Benchmarks
 
 To compare JAX vs NumPy performance on your hardware:
 
