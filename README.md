@@ -120,3 +120,5 @@ To compare JAX vs NumPy performance on your hardware:
 ```bash
 python benchmarks/run_benchmark.py
 ```
+
+For detailed performance analysis and charts, please see the [Benchmark Report](docs/BENCHMARK_REPORT.md).
