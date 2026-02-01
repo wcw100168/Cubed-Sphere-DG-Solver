@@ -1,106 +1,259 @@
-# Cubed Sphere DG Solver (High-Performance Advection)
+# Cubed Sphere DG Solver
+
+
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
 [![Backend](https://img.shields.io/badge/Backend-NumPy%20%7C%20JAX-orange)](https://github.com/google/jax)
 
-這是一個高效能的立方體球面 (Cubed Sphere) 不連續伽略金 (Discontinuous Galerkin) 求解器。專為求解球面上的雙曲型偏微分方程 (如平流方程) 而設計。本專案採用現代軟體架構，並支援 **NumPy** 與 **JAX** 雙後端，可無縫切換 CPU 模擬與 GPU 加速運算。
 
-## 🌟 核心特色 (Key Features)
 
-- **高效能架構**: 支援 JAX JIT 編譯與 XLA 加速，在 GPU 上可獲得顯著效能提升。
-- **高階數值方法**: 採用譜元素法 (Spectral Element Method) 與 LGL 積分點，具備指數收斂特性。
-- **混合並行策略**: 針對 Apple M1/M2 Metal 與 NVIDIA GPU 最佳化的向量化運算。
-- **模組化設計**: 數值核心、網格幾何與時間積分器完全解耦，易於擴充。
+A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion equations on the Cubed-Sphere geometry. Designed with a PyTorch-like stateless API, this package enables seamless switching between **NumPy (CPU)** and **JAX (GPU/TPU)** backends for optimal performance.
 
----
 
-## 📦 安裝說明 (Installation)
 
-本專案採用標準 Python 套件結構。建議在虛擬環境中安裝。
+## Key Features
+
+
+
+- **Dual Backend Architecture**: Run purely on CPU with NumPy or accelerate significantly on GPU with JAX.
+
+- **High-Order Accuracy**: Implements the Spectral Element Method with Legendre-Gauss-Lobatto (LGL) nodes.
+
+- **Strict Conservation**: Ensures mass conservation through rigorous weak-form formulation.
+
+- **Stateless Design**: Separates physics (solvers) from data (state), facilitating easy integration with optimization or machine learning workflows.
+
+
+
+## Theoretical Background
+
+
+
+For a detailed explanation of the mathematical formulation, including the Discontinuous Galerkin method, weak form derivation, and Cubed Sphere geometry metrics, please refer to the [Theoretical Background](docs/THEORY.md).
+
+
+
+*(Note: Theory documentation is currently in progress)*
+
+
+
+## Project Structure
+
+
+
+```text
+
+Cubed-Sphere-DG-Solver/
+
+├── benchmarks/            # Scripts for performance comparison (NumPy vs JAX)
+
+├── cubed_sphere/          # Main package source code
+
+│   ├── backend.py         # Backend dispatch logic (NumPy/JAX abstraction)
+
+│   ├── geometry/          # Grid generation, metric tensors, and coordinate transforms
+
+│   ├── numerics/          # LGL nodes, weights, and differentiation matrices
+
+│   ├── solvers/           # Time integration loops and PDE operators
+
+│   └── utils/             # Visualization tools and helper functions
+
+├── docs/                  # Documentation and reports
+
+├── examples/              # Usage examples and run scripts
+
+├── tests/                 # Unit tests for conservation and numerical accuracy
+
+├── pyproject.toml         # Package configuration and dependencies
+
+└── README.md              # Project documentation
+
+
+
+```
+
+
+
+## Installation
+
+
+
+### 1. Clone and Install
+
+
+
+Clone the repository and install it in editable mode:
+
+
 
 ```bash
-# 1. 複製專案
-git clone <repo_url>
-cd DG_method_on_cube_sphere/套件化1
 
-# 2. 安裝依賴與專案 (編輯模式)
+git clone [https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git](https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git)
+
+cd Cubed-Sphere-DG-Solver
+
 pip install -e .
 
-# 3. (選用) 若需 GPU 加速，請安裝 JAX
-# pip install "jax[cpu]"      # For CPU only
-# pip install "jax[cuda12]"   # For NVIDIA GPU
-# pip install "jax-metal"     # For Apple Silicon
+
+
 ```
 
----
 
-## 🚀 快速開始 (Quick Start)
 
-只需 5 行程式碼即可執行一個完整的球面平流模擬：
+### 2. Optional: Enable GPU Acceleration
+
+
+
+To use the JAX backend with GPU support, install the appropriate version of JAX:
+
+
+
+```bash
+
+# For macOS (Apple Silicon / Metal)
+
+pip install jax jaxlib jax-metal
+
+
+
+# For Linux (NVIDIA GPU / CUDA 12)
+
+pip install "jax[cuda12]"
+
+
+
+# For CPU only (if GPU is not available)
+
+pip install "jax[cpu]"
+
+
+
+```
+
+
+
+## Quick Start
+
+
+
+You can run a complete advection simulation in just a few lines of code:
+
+
 
 ```python
+
 from cubed_sphere.solvers import CubedSphereAdvectionSolver, AdvectionConfig
 
-# 1. 設定參數 (設定 N=32, 模擬時間 T=1.0)
+from cubed_sphere.utils import plot_cubed_sphere_state
+
+
+
+# 1. Configure parameters (N=32, T=1.0)
+
 config = AdvectionConfig(N=32, CFL=1.0, T_final=1.0, backend='numpy')
 
-# 2. 初始化求解器與初始條件
+
+
+# 2. Initialize solver and initial condition
+
 solver = CubedSphereAdvectionSolver(config)
+
 u0 = solver.get_initial_condition(type="gaussian")
 
-# 3. 執行模擬 (自動處理時間步進)
+
+
+# 3. Run simulation (Time stepping is handled automatically)
+
 final_state = solver.solve((0.0, 1.0), u0)
+
+
+
 print("Simulation Complete!")
+
+
+
 ```
 
-您可以參閱 `examples/run_advection.py` 獲得更完整的繪圖範例。
 
----
 
-## ⚙️ 後端切換 (Backend Switching)
+See `examples/run_advection.py` for a full example including visualization.
 
-本專案核心優勢在於能夠切換運算後端。
 
-### 1. 使用 NumPy (預設, CPU)
-適合除錯、開發與小規模測試。完全基於記憶體內原地運算 (In-place operations) 優化。
+
+## Backend Switching
+
+
+
+This package supports two computational backends:
+
+
+
+### NumPy (Default, CPU)
+
+
+
+Best for debugging, development, and small-scale testing. Optimized using in-place operations to minimize memory allocation.
+
+
 
 ```python
+
 config = AdvectionConfig(..., backend='numpy')
+
+
+
 ```
 
-### 2. 使用 JAX (高效能, GPU/TPU)
-適合大規模高解析度模擬。利用 JIT (Just-In-Time) 編譯技術將時間迴圈融合為單一 XLA 內核。
+
+
+### JAX (High-Performance, GPU/TPU)
+
+
+
+Best for large-scale, high-resolution simulations. Leverages JIT (Just-In-Time) compilation and XLA to run on accelerators.
+
+
 
 ```python
+
 config = AdvectionConfig(..., backend='jax')
+
+
+
 ```
 
-**注意事項 (macOS / Apple Silicon)**:
-若在 Mac 上遇到 JAX `float64` 或 Metal 後端相容性問題，可透過環境變數強制使用 CPU 進行 JAX 運算：
+
+
+## Testing & Benchmarks
+
+
+
+To verify numerical precision (Mass Conservation ~1e-12):
+
+
+
 ```bash
-JAX_PLATFORMS=cpu python examples/run_jax.py
+
+python -m unittest discover tests
+
+
+
 ```
 
----
 
-## 📊 效能基準 (Benchmarks)
-我們提供了自動化的基準測試腳本。詳細報告請見 [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)。
 
-執行測試：
+To compare JAX vs NumPy performance on your hardware:
+
+
+
 ```bash
+
 python benchmarks/run_benchmark.py
+
+
+
 ```
-
-## 📂 專案結構
-- `cubed_sphere/`: 核心套件原始碼
-  - `numerics/`: 多項式與積分算子
-  - `geometry/`: 立方體球網格生成與投影
-  - `solvers/`: 時間積分器與 PDE 求解器
-- `examples/`: 使用範例腳本
-- `tests/`: 單元測試 (Unit Tests)
-
----
-
-## License
-MIT License
