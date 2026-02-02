@@ -1,6 +1,6 @@
 import numpy as np
 import dataclasses
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, Callable
 from cubed_sphere.solvers.base import BaseSolver
 from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid
 from cubed_sphere.numerics.spectral import lgl_diff_matrix
@@ -14,6 +14,7 @@ class AdvectionConfig:
     CFL: float = 1.0         # CFL number
     T_final: float = 1.0     # Final time
     backend: str = 'numpy'   # 'numpy' or 'jax'
+    n_vars: int = 1          # Number of variables/species
 
 class CubedSphereAdvectionSolver(BaseSolver):
     """
@@ -110,10 +111,16 @@ class CubedSphereAdvectionSolver(BaseSolver):
             term2 = (fg.sqrt_g * u2) @ self.D.T
             fg.div_u = (1.0 / fg.sqrt_g) * (term1 + term2)
 
-    def get_initial_condition(self, type: str = "gaussian", h0: float = 1.0, r0: Optional[float] = None) -> np.ndarray:
+    def get_initial_condition(self, type: str = "gaussian", 
+                              func: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
+                              h0: float = 1.0, r0: Optional[float] = None) -> np.ndarray:
         """
-        Generate an initial scalar field phi.
-        Returns a newly allocated state array (6, N, N).
+        Generate an initial scalar field phi.n_vars, 6, N, N).
+        
+        Args:
+            type: "gaussian", "cosine", or "custom" (requires func)
+            func: Callable f(lon, lat) -> value. lon/lat in radians.
+            h0, r0: Parameters for built-in types.
         """
         if r0 is None: 
             r0 = self.cfg.R / 3.0
@@ -121,9 +128,15 @@ class CubedSphereAdvectionSolver(BaseSolver):
         center_lon = 0.0
         center_lat = 0.0
         
-        # State: (6, N, N)
-        # Use simple numpy for initial condition generation (geometry calc) then transfer
-        state = np.zeros((6, self.cfg.N, self.cfg.N))
+        # State: (n_vars, 6, N, N)
+        if self.cfg.n_vars > 1:
+            state = np.zeros((self.cfg.n_vars, 6, self.cfg.N, self.cfg.N))
+        else:
+            state = np.zeros((1, 6, self.cfg.N, self.cfg.N)) # Keep 4D internally even for n_vars=1 to simplify? 
+            # OR we can keep 3D separately.
+            # Current request implies (n_vars, 6, ...).
+            # But legacy code used (6, ...).
+            # Let's standardize on (n_vars, 6, ...)
         
         # ... Geometry calculations done on CPU for simplicity ...
         for i, fname in enumerate(self.topology.FACE_MAP):
@@ -136,21 +149,41 @@ class CubedSphereAdvectionSolver(BaseSolver):
             
             lam, theta = self.geometry.lonlat_from_xyz(X, Y, Z)
             
-            sin_c, cos_c = np.sin(center_lat), np.cos(center_lat)
-            sin_th, cos_th = np.sin(theta), np.cos(theta)
+            val = np.zeros_like(lam)
             
-            cos_sigma = sin_th * sin_c + cos_th * cos_c * np.cos(lam - center_lon)
-            r_d = self.cfg.R * np.arccos(np.clip(cos_sigma, -1.0, 1.0))
-            
-            val = np.zeros_like(r_d)
             if type == "gaussian":
+                sin_c, cos_c = np.sin(center_lat), np.cos(center_lat)
+                sin_th, cos_th = np.sin(theta), np.cos(theta)
+                cos_sigma = sin_th * sin_c + cos_th * cos_c * np.cos(lam - center_lon)
+                r_d = self.cfg.R * np.arccos(np.clip(cos_sigma, -1.0, 1.0))
                 val = h0 * np.exp(-(r_d / r0)**2)
             elif type == "cosine":
+                sin_c, cos_c = np.sin(center_lat), np.cos(center_lat)
+                sin_th, cos_th = np.sin(theta), np.cos(theta)
+                cos_sigma = sin_th * sin_c + cos_th * cos_c * np.cos(lam - center_lon)
+                r_d = self.cfg.R * np.arccos(np.clip(cos_sigma, -1.0, 1.0))
                 val = np.where(r_d < r0, 0.5 * h0 * (1.0 + np.cos(np.pi * r_d / r0)), 0.0)
+            elif type == "custom":
+                if func is None:
+                    raise ValueError("must provide 'func' argument when type='custom'")
+                val = func(lam, theta)
             else:
-                raise ValueError(f"Unknown initial condition type: {type}")
+                # If user provided func but didn't specify type="custom", we can infer it
+                if func is not None:
+                    val = func(lam, theta)
+                else:
+                    raise ValueError(f"Unknown initial condition type: {type}")
             
-            state[i] = val
+            # Broadcast val to all vars by default?
+            # Or just set var 0 and let user handle others?
+            # For backward compatibility, set all vars to the same IC or just use "custom" with variable awareness?
+            # The prompt implies initializing system.
+            # We'll set all vars to the same unless customized later.
+            state[:, i, :, :] = val
+        
+        # Squeeze if n_vars=1? No, prompt says 'Use (n_vars, 6, N, N)'.
+        # However, to maintain some compatibility with scalar code external to this class?
+        # The prompt says: "Refactor... to support N_vars >= 1".
         
         if self.use_jax:
              from cubed_sphere import backend
@@ -178,7 +211,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
 
         for i, fname in enumerate(self.topology.FACE_MAP):
             fg = self.faces[fname]
-            phi = global_phi[i]
+            phi = global_phi[..., i, :, :] # (n_vars, N, N)
             
             # --- 1. Volume Integral ---
             flux = (1.0 / fg.sqrt_g) * (da(fg.sqrt_g * fg.u1 * phi) + db(fg.sqrt_g * fg.u2 * phi))
@@ -195,24 +228,27 @@ class CubedSphereAdvectionSolver(BaseSolver):
                 return flux_diff / w_metric
 
             # Calculate penalties for the 4 edges of THIS face
-            p_west = sat(-fg.u1[0, :], phi[0, :], self.topology.get_neighbor_data(global_phi, i, 0), fg.sqrt_g[0, :] * fg.walpha[0])
-            p_east = sat(fg.u1[-1, :], phi[-1, :], self.topology.get_neighbor_data(global_phi, i, 1), fg.sqrt_g[-1, :] * fg.walpha[-1])
-            p_south = sat(-fg.u2[:, 0], phi[:, 0], self.topology.get_neighbor_data(global_phi, i, 2), fg.sqrt_g[:, 0] * fg.wbeta[0])
-            p_north = sat(fg.u2[:, -1], phi[:, -1], self.topology.get_neighbor_data(global_phi, i, 3), fg.sqrt_g[:, -1] * fg.wbeta[-1])
+            # Note: get_neighbor_data now returns (..., edge_len)
             
-            # Construct penalty field (shape N, N)
+            p_west = sat(-fg.u1[0, :], phi[..., 0, :], self.topology.get_neighbor_data(global_phi, i, 0), fg.sqrt_g[0, :] * fg.walpha[0])
+            p_east = sat(fg.u1[-1, :], phi[..., -1, :], self.topology.get_neighbor_data(global_phi, i, 1), fg.sqrt_g[-1, :] * fg.walpha[-1])
+            p_south = sat(-fg.u2[:, 0], phi[..., :, 0], self.topology.get_neighbor_data(global_phi, i, 2), fg.sqrt_g[:, 0] * fg.wbeta[0])
+            p_north = sat(fg.u2[:, -1], phi[..., :, -1], self.topology.get_neighbor_data(global_phi, i, 3), fg.sqrt_g[:, -1] * fg.wbeta[-1])
+            
+            # Construct penalty field (shape n_vars, N, N)
             # Start with zeros
             pen = xp.zeros_like(phi)
-            # Add updates
-            pen = pen.at[0, :].add(p_west)
-            pen = pen.at[-1, :].add(p_east)
-            pen = pen.at[:, 0].add(p_south)
-            pen = pen.at[:, -1].add(p_north)
+            # Add updates. Since phi is (..., N, N), we use .at
+            pen = pen.at[..., 0, :].add(p_west)
+            pen = pen.at[..., -1, :].add(p_east)
+            pen = pen.at[..., :, 0].add(p_south)
+            pen = pen.at[..., :, -1].add(p_north)
             
             rhs_i = -skew_div + pen
             rhs_list.append(rhs_i)
         
-        return xp.stack(rhs_list)
+        # Stack on axis 1 (face dim)
+        return xp.stack(rhs_list, axis=1)
 
     def _compute_rhs_numpy(self, t: float, global_phi: np.ndarray) -> np.ndarray:
         """
@@ -239,13 +275,14 @@ class CubedSphereAdvectionSolver(BaseSolver):
 
         for i, fname in enumerate(self.topology.FACE_MAP):
             fg = self.faces[fname]
-            phi = global_phi[i]
+            phi = global_phi[..., i, :, :] # (n_vars, N, N) or (N, N)
             
             if fg.sqrt_g is None or fg.u1 is None or fg.u2 is None or fg.div_u is None:
                 raise RuntimeError(f"Face {fname} not fully initialized.")
 
             # --- 1. Volume Integral (Skew-Symmetric Form) ---
             # Flux Term: (1/J) * div(J * u * phi)
+            # broadcasting D (N,N) @ F (..., N, N) works in numpy
             flux = (1.0 / fg.sqrt_g) * (da(fg.sqrt_g * fg.u1 * phi) + db(fg.sqrt_g * fg.u2 * phi))
             
             # Advective Term: u * grad(phi)
@@ -262,21 +299,21 @@ class CubedSphereAdvectionSolver(BaseSolver):
 
             # West (Alpha=-1) -> Vn = -u1
             q_out = self.topology.get_neighbor_data(global_phi, i, 0)
-            penalty[0, :] += sat(-fg.u1[0, :], phi[0, :], q_out, fg.sqrt_g[0, :] * fg.walpha[0])
+            penalty[..., 0, :] += sat(-fg.u1[0, :], phi[..., 0, :], q_out, fg.sqrt_g[0, :] * fg.walpha[0])
             
             # East (Alpha=1) -> Vn = u1
             q_out = self.topology.get_neighbor_data(global_phi, i, 1)
-            penalty[-1, :] += sat(fg.u1[-1, :], phi[-1, :], q_out, fg.sqrt_g[-1, :] * fg.walpha[-1])
+            penalty[..., -1, :] += sat(fg.u1[-1, :], phi[..., -1, :], q_out, fg.sqrt_g[-1, :] * fg.walpha[-1])
             
             # South (Beta=-1) -> Vn = -u2
             q_out = self.topology.get_neighbor_data(global_phi, i, 2)
-            penalty[:, 0] += sat(-fg.u2[:, 0], phi[:, 0], q_out, fg.sqrt_g[:, 0] * fg.wbeta[0])
+            penalty[..., :, 0] += sat(-fg.u2[:, 0], phi[..., :, 0], q_out, fg.sqrt_g[:, 0] * fg.wbeta[0])
             
             # North (Beta=1) -> Vn = u2
             q_out = self.topology.get_neighbor_data(global_phi, i, 3)
-            penalty[:, -1] += sat(fg.u2[:, -1], phi[:, -1], q_out, fg.sqrt_g[:, -1] * fg.wbeta[-1])
+            penalty[..., :, -1] += sat(fg.u2[:, -1], phi[..., :, -1], q_out, fg.sqrt_g[:, -1] * fg.wbeta[-1])
             
-            rhs[i] = -skew_div + penalty
+            rhs[..., i, :, :] = -skew_div + penalty
             
         return rhs
 

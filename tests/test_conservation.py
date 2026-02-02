@@ -13,7 +13,11 @@ class TestConservation(unittest.TestCase):
         
         for i, fname in enumerate(solver.topology.FACE_MAP):
             fg = solver.faces[fname]
-            phi = state[i]
+            # Handle (n_vars, 6, N, N) or (6, N, N) legacy
+            if state.ndim == 4:
+                phi = state[0, i]
+            else:
+                phi = state[i]
             
             # Ensure weighting terms are correct
             # w_alpha (N,), w_beta (N,) -> W (N,N) outer product

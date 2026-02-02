@@ -9,9 +9,16 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion eq
 ## Key Features
 
 - **Dual Backend Architecture**: Run purely on CPU with NumPy or accelerate significantly on GPU with JAX.
+- **Multi-Variable Support**: Solves systems of equations (e.g., Shallow Water) with `(n_vars, 6, N, N)` state tensors.
 - **High-Order Accuracy**: Implements the Spectral Element Method with Legendre-Gauss-Lobatto (LGL) nodes.
 - **Strict Conservation**: Ensures mass conservation through rigorous weak-form formulation.
 - **Stateless Design**: Separates physics (solvers) from data (state), facilitating easy integration with optimization or machine learning workflows.
+- **Advanced Regridding**: Includes tools to remap scalar and vector fields between Rectilinear (Lat-Lon) and Cubed-Sphere grids.
+
+## Supported Models
+
+1.  **Scalar Advection**: Transport of a passive scalar field driven by a prescribed wind velocity.
+2.  **Linearized Shallow Water Equations (LSWE)**: Wave propagation on a rotating sphere, solving for height ($h$) and velocity ($u, v$).
 
 ## Theoretical Background
 

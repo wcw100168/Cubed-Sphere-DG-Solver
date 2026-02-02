@@ -17,6 +17,7 @@ GREEN_RED_CMAP = LinearSegmentedColormap.from_list("green_red", COLORS_LIST)
 def plot_cubed_sphere_state(
     solver: Any, 
     state: np.ndarray, 
+    var_idx: int = 0,
     title: str = "Advection on Cubed-Sphere",
     cmap: Any = GREEN_RED_CMAP,
     vmin: Optional[float] = None,
@@ -31,7 +32,9 @@ def plot_cubed_sphere_state(
     solver : CubedSphereAdvectionSolver
         The solver instance containing grid information.
     state : np.ndarray
-        The state array (6, N, N).
+        The state array. Can be (6, N, N) or (n_vars, 6, N, N).
+    var_idx : int
+        Index of variable to plot if state is 4D.
     title : str
         Plot title.
     cmap : Colormap
@@ -44,15 +47,21 @@ def plot_cubed_sphere_state(
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
     
-    if vmin is None: vmin = np.min(state)
-    if vmax is None: vmax = np.max(state)
+    # Handle scalar vs system state
+    if state.ndim == 4:
+        plot_data = state[var_idx]
+    else:
+        plot_data = state
+    
+    if vmin is None: vmin = np.min(plot_data)
+    if vmax is None: vmax = np.max(plot_data)
     
     norm = colors.Normalize(vmin=vmin, vmax=vmax)
     
     # Plot each face
     for i, fname in enumerate(solver.topology.FACE_MAP):
         fg = solver.faces[fname]
-        data = state[i]
+        data = plot_data[i]
         
         # Color mapping
         rgba = cmap(norm(data))
@@ -65,7 +74,7 @@ def plot_cubed_sphere_state(
     
     # Colorbar
     mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
-    mappable.set_array(state)
+    mappable.set_array(plot_data)
     cbar = plt.colorbar(mappable, ax=ax, shrink=0.8, pad=0.05)
     cbar.set_label("Phi")
     

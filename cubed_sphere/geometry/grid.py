@@ -66,22 +66,31 @@ class CubedSphereTopology:
             1D array of neighbor boundary data.
         """
         nbr_face, nbr_side, swap, reverse = self.CONN_TABLE[(face_idx, side_idx)]
-        nbr_data = global_state[nbr_face]
+        
+        # Access neighbor face data
+        # global_state form: (..., 6, N, N) or (6, N, N)
+        # We assume the second to last dimension is Face Index if it matches 6?
+        # Actually standard is (n_vars, 6, N, N) or (6, N, N).
+        # We index the dimension corresponding to faces. 
+        # But 'global_state' could be varying shapes.
+        # Let's assume standard layout where face dim is -3 (N,N are -1,-2).
+        
+        nbr_data = global_state[..., nbr_face, :, :]
         
         # Extract slice
         if nbr_side == 0: 
-            slice_data = nbr_data[0, :]   # West edge
+            slice_data = nbr_data[..., 0, :]   # West edge
         elif nbr_side == 1: 
-            slice_data = nbr_data[-1, :]  # East edge
+            slice_data = nbr_data[..., -1, :]  # East edge
         elif nbr_side == 2: 
-            slice_data = nbr_data[:, 0]   # South edge
+            slice_data = nbr_data[..., :, 0]   # South edge
         elif nbr_side == 3: 
-            slice_data = nbr_data[:, -1]  # North edge
+            slice_data = nbr_data[..., :, -1]  # North edge
         else:
             raise ValueError(f"Invalid side index: {nbr_side}")
         
         if reverse:
-            slice_data = slice_data[::-1]
+            slice_data = slice_data[..., ::-1]
             
         return slice_data
 

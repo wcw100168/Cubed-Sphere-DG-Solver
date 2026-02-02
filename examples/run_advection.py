@@ -1,6 +1,8 @@
 import numpy as np
 import sys
 import os
+import matplotlib
+matplotlib.use('Agg') # Non-interactive backend for automation
 
 # Ensure we can import the local package
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
