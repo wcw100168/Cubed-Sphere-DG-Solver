@@ -12,13 +12,16 @@ from cubed_sphere.utils import plot_cubed_sphere_state
 
 def main():
     # Configuration
+    backend = os.environ.get('CUBED_SPHERE_BACKEND', 'numpy')
+    print(f"Running Advection with backend: {backend}")
     config = AdvectionConfig(
         N=24,
         R=1.0,
         u0=2 * np.pi,
         alpha0=0.0,
         CFL=1.0,
-        T_final=1.0
+        T_final=1.0,
+        backend=backend
     )
     
     print("Configuration:", config)

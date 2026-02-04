@@ -334,13 +334,13 @@ class CubedSphereAdvectionSolver(BaseSolver):
             
         return local_state
 
-    def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray) -> np.ndarray:
+    def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:
         """
         Run simulation from t_span[0] to t_span[1] starting with initial_state.
         Dispatches to JAX or NumPy implementation.
         """
         if self.use_jax:
-             return self._solve_jax(t_span, initial_state)
+             return self._solve_jax(t_span, initial_state, callbacks)
         
         # === NumPy Implementation (In-Place Optimized) ===
         t_start, t_end = t_span
@@ -356,6 +356,11 @@ class CubedSphereAdvectionSolver(BaseSolver):
         du = np.zeros_like(state)
         step_count = 0
         epsilon = 1e-12
+        
+        # Initial Callback
+        if callbacks:
+            for cb in callbacks:
+                cb(current_time, state)
         
         while current_time < t_end - epsilon:
             remaining = t_end - current_time
@@ -381,6 +386,11 @@ class CubedSphereAdvectionSolver(BaseSolver):
             current_time += step_dt
             step_count += 1
             
+            # Callback
+            if callbacks:
+                for cb in callbacks:
+                    cb(current_time, state)
+            
             # Print occasionally (optional check to avoid spam)
             if step_count % 50 == 0:
                  print(f"Step {step_count}: t={current_time:.4f}")
@@ -388,41 +398,89 @@ class CubedSphereAdvectionSolver(BaseSolver):
         print("=== Simulation Complete ===")
         return state
 
-    def _solve_jax(self, t_span: Tuple[float, float], initial_state: Any) -> Any:
+    def _solve_jax(self, t_span: Tuple[float, float], initial_state: Any, callbacks: List[Any] = None) -> Any:
         """
-        JAX implementation using lax.scan for bulk steps and one extra step for residual.
-        This avoids Python loop overhead and enables XLA optimization for the time loop.
+        JAX implementation using lax.scan for bulk steps.
+        If callbacks are present, uses 'Chunked Stepping' to allow CPU interrupts for I/O.
         """
         import jax.lax as lax
+        import numpy as np
         
         t_start, t_end = t_span
         duration = t_end - t_start
-        
-        # Constant dt
         dt_est = (self.cfg.CFL / self.cfg.u0) * (2 / self.cfg.N**2)
         
-        # Calculate steps
-        n_steps = int(duration // dt_est)
-        residual = duration - n_steps * dt_est
-        
-        print(f"=== Starting Simulation (JAX) ===")
-        print(f"N={self.cfg.N}, CFL={self.cfg.CFL}, dt={dt_est:.5f}")
-        print(f"Total Duration={duration:.5f} -> Full Steps={n_steps}, Residual={residual:.5e}")
-        
-        # 1. Bulk steps using lax.scan (Compiled Loop)
-        # Note: self._jit_step is already JIT-compiled. 
-        # We wrap it in a scanner function.
         def scan_body(carry, _):
             s = carry
-            # Fixed dt for bulk steps
             s_new = self._jit_step(s, dt_est)
             return s_new, None
 
         state = initial_state
+        current_time = t_start
         
-        if n_steps > 0:
-            # Execute n_steps
-            state, _ = lax.scan(scan_body, state, None, length=n_steps)
+        # --- Strategy Selection ---
+        if not callbacks:
+            # OPTION A: Maximum Speed (No Callbacks)
+            n_steps = int(duration // dt_est)
+            residual = duration - n_steps * dt_est
+            
+            print(f"=== Starting Simulation (JAX - Fast Mode) ===")
+            print(f"Total Steps={n_steps}, Residual={residual:.5e}")
+            
+            if n_steps > 0:
+                state, _ = lax.scan(scan_body, state, None, length=n_steps)
+            if residual > 1e-12:
+                state = self._jit_step(state, residual)
+        else:
+            # OPTION B: Chunked Stepping (With I/O)
+            # Infer save interval from callbacks? Hard to know exactly.
+            # Default to 0.05 sim seconds or 100 steps
+            chunk_dt = 100 * dt_est 
+            # Try to get interval from monitor if available
+            for cb in callbacks:
+                if hasattr(cb, 'save_interval'):
+                    chunk_dt = min(chunk_dt, cb.save_interval)
+            
+            # Ensure chunk_dt is at least 1 step
+            if chunk_dt < dt_est: chunk_dt = dt_est * 10
+            
+            print(f"=== Starting Simulation (JAX - Chunked Mode) ===")
+            print(f"Chunk Size ~ {chunk_dt:.4f}s")
+             
+            # Initial Callback
+            current_state_np = np.array(state)
+            for cb in callbacks: cb(current_time, current_state_np)
+
+            # Outer Python Loop
+            while current_time < t_end - 1e-9:
+                # Determine next stop
+                next_target = min(current_time + chunk_dt, t_end)
+                chunk_duration = next_target - current_time
+                
+                n_substeps = int(chunk_duration // dt_est)
+                if n_substeps < 1 and chunk_duration > 1e-12:
+                     # Just residual step
+                     n_substeps = 0
+                     residual = chunk_duration
+                else:
+                     residual = chunk_duration - n_substeps * dt_est
+                
+                # Run JIT Kernel
+                if n_substeps > 0:
+                    state, _ = lax.scan(scan_body, state, None, length=n_substeps)
+                if residual > 1e-12:
+                    state = self._jit_step(state, residual)
+                
+                current_time = next_target
+                
+                # Sync & Callback
+                # Note: `state` is on GPU. converting to np array forces sync.
+                current_state_np = np.array(state)
+                for cb in callbacks:
+                    cb(current_time, current_state_np)
+                    
+        print("=== Simulation Complete (JAX) ===")
+        return state
             
         # 2. Residual step (if needed)
         if residual > 1e-12:

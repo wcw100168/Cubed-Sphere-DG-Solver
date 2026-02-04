@@ -1,6 +1,11 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 from cubed_sphere.solvers.swe import CubedSphereLSWESolver, SWEConfig
 from cubed_sphere.utils import regrid, vis
 
@@ -11,12 +16,15 @@ def verify_geostrophic():
     # Ensure "Small Planet" or Real Earth?
     # Use Earth params usually for SWE: R=6.371e6, Omega=7.292e-5, g=9.81
     R_earth = 6.371e6
+    backend = os.environ.get('CUBED_SPHERE_BACKEND', 'numpy')
+    print(f"Running SWE Verification with backend: {backend}")
     config = SWEConfig(
         N=32, 
-        CFL=0.5, 
+        CFL=0.1, 
         R=R_earth, 
         H_avg=10000.0, # 10km depth
-        T_final=3600.0 # 1 Hour
+        T_final=3600.0, # 1 Hour
+        backend=backend
     )
     solver = CubedSphereLSWESolver(config)
     

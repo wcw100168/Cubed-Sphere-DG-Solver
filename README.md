@@ -17,8 +17,10 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion eq
 
 ## Supported Models
 
-1.  **Scalar Advection**: Transport of a passive scalar field driven by a prescribed wind velocity.
+1.  **Scalar Advection**: Transport of a passive scalar field driven by a prescribed wind velocity. Fully supported on both NumPy and JAX backends.
 2.  **Linearized Shallow Water Equations (LSWE)**: Wave propagation on a rotating sphere, solving for height ($h$) and velocity ($u, v$).
+    *   **NumPy Backend**: Fully verified and stable conservation properties.
+    *   **JAX Backend**: *Experimental*. Currently unstable for long-term integration due to numerical issues in the flux formulation. Use for research or short-term dynamics only.
 
 ## Theoretical Background
 

@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.cm as cm
+import matplotlib.animation as animation
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional, List, Any
@@ -13,6 +14,88 @@ COLORS_LIST = [
     (1.0, "red"),
 ]
 GREEN_RED_CMAP = LinearSegmentedColormap.from_list("green_red", COLORS_LIST)
+
+def animate_from_netcdf(nc_filename: str, output_mp4: str, var_idx: int = 0, fps: int = 10):
+    """
+    Generate MP4 animation from NetCDF file by Re-generating the Grid geometry.
+    Uses netCDF4 directly to avoid xarray issues in some environments.
+    """
+    import netCDF4 as nc
+    from cubed_sphere.geometry.grid import CubedSphereEquiangular, CubedSphereTopology
+    
+    # Read Logic
+    try:
+        ds = nc.Dataset(nc_filename, 'r')
+        times = ds.variables['time'][:]
+        # Check if 'xi' or 'nx' exists
+        if 'xi' in ds.dimensions:
+            N = ds.dimensions['xi'].size
+        else:
+            # Fallback or error
+            N = ds.variables['state'].shape[3]
+            
+        # Load data (could be large, but for demo ok)
+        data_all = ds.variables['state'][:] # (time, var, face, xi, eta)
+        ds.close()
+    except Exception as e:
+        print(f"Failed to open NetCDF with netCDF4: {e}")
+        return
+
+    # Reconstruct Geometry (assuming R=1.0 default)
+    # Use the same face definition as Topology
+    face_names = CubedSphereTopology.FACE_MAP
+    geo = CubedSphereEquiangular(R=1.0)
+    faces = {}
+    for fname in face_names:
+        faces[fname] = geo.generate_face(N, fname)
+        
+    # Setup Figure
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_title(f"Animation: {nc_filename}")
+    
+    # Pre-compute min/max for constant colorbar
+    print("Computing global min/max for colorbar...")
+    # data_all is (time, var, face, xi, eta)
+    if data_all.ndim == 5:
+        sub_data = data_all[:, var_idx, :, :, :]
+    else: 
+        sub_data = data_all
+        
+    vmin = np.min(sub_data)
+    vmax = np.max(sub_data)
+    norm = colors.Normalize(vmin=vmin, vmax=vmax)
+    
+    def init():
+        ax.clear()
+        ax.set_box_aspect([1, 1, 1])
+        return []
+
+    def update(frame):
+        ax.clear()
+        
+        t = times[frame]
+        ax.set_title(f"Time: {t:.3f}")
+        ax.set_box_aspect([1, 1, 1])
+        
+        # State at frame
+        state_t = sub_data[frame] # (6, N, N)
+        
+        for i, fname in enumerate(face_names):
+            fg = faces[fname]
+            data = state_t[i]
+            rgba = GREEN_RED_CMAP(norm(data))
+            
+            ax.plot_surface(fg.X, fg.Y, fg.Z, rstride=1, cstride=1,
+                           facecolors=rgba,
+                           linewidth=0, antialiased=False, shade=False, alpha=0.8)
+        return ax,
+
+    ani = animation.FuncAnimation(fig, update, frames=len(times), init_func=init, blit=False)
+    
+    print(f"Saving animation to {output_mp4}...")
+    ani.save(output_mp4, fps=fps, writer='ffmpeg')
+    print("Done.")
 
 def plot_cubed_sphere_state(
     solver: Any, 
