@@ -54,7 +54,21 @@ def main():
     python_exe = sys.executable
     
     tests = [
-        # 1. Unit/Integration Tests
+        # 1. Unit Tests
+        {
+            "cmd": [python_exe, "-m", "unittest", "tests/test_geometry.py"],
+            "desc": "Geometry & Topology Unit Tests"
+        },
+        {
+            "cmd": [python_exe, "-m", "unittest", "tests/test_advection.py"],
+            "desc": "Advection & Conservation Unit Tests"
+        },
+        {
+            "cmd": [python_exe, "-m", "unittest", "tests/test_consistency.py"],
+            "desc": "Backend Consistency Unit Tests"
+        },
+
+        # 2. Integration Tests
         {
             "cmd": [python_exe, "-m", "unittest", "tests/test_swe_integration.py"],
             "desc": "SWE Integration Tests (NumPy Backend)"
@@ -64,7 +78,7 @@ def main():
             "desc": "SWE Integration Tests (JAX Backend)"
         },
         
-        # 2. Smoke Tests (Example Scripts)
+        # 3. Smoke Tests (Example Scripts)
         {
             "cmd": [python_exe, "examples/run_swe_convergence.py", 
                    "--backend", "numpy", "--hours", "0.01", "--min_n", "8", "--max_n", "8"],
