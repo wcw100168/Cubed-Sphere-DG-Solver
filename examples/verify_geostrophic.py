@@ -6,7 +6,7 @@ import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from cubed_sphere.solvers.swe import CubedSphereLSWESolver, SWEConfig
+from cubed_sphere.solvers.swe import CubedSphereSWE, SWEConfig
 from cubed_sphere.utils import regrid, vis
 
 def verify_geostrophic():
@@ -22,11 +22,10 @@ def verify_geostrophic():
         N=32, 
         CFL=0.1, 
         R=R_earth, 
-        H_avg=10000.0, # 10km depth
-        T_final=3600.0, # 1 Hour
+        H_avg=10000.0, # 10km depth,
         backend=backend
     )
-    solver = CubedSphereLSWESolver(config)
+    solver = CubedSphereSWE(config)
     
     # Initialize State: Geostrophic Balance
     # Wind: Zonal Flow u = u0 cos(lat)

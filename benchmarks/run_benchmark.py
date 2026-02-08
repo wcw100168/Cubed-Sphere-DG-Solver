@@ -3,6 +3,14 @@ import pandas as pd
 import sys
 import os
 
+# Enable JAX x64 and Force CPU
+os.environ["JAX_PLATFORMS"] = "cpu"
+try:
+    import jax
+    jax.config.update("jax_enable_x64", True)
+except ImportError:
+    pass
+
 # 確保可以 import cubed_sphere 套件
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
