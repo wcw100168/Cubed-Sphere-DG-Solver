@@ -64,6 +64,10 @@ class CubedSphereSWE(BaseSolver):
         """
         Helper to generate initial conditions using the implementation's geometry.
         """
+        # Delegate to implementation if it supports it, otherwise fallback
+        if hasattr(self._impl, 'get_initial_condition'):
+             return self._impl.get_initial_condition(type=type, **kwargs)
+             
         if type == "case2":
             return self._init_case2()
         else:

@@ -156,7 +156,9 @@ class CubedSphereSWEJax(BaseSolver):
         g_inv[..., 0, 1] = -g12 * inv_det
         g_inv[..., 1, 0] = -g12 * inv_det
         
-        sqrt_g = np.sqrt(det)
+        # sqrt_g = np.sqrt(det) # numerical
+        # Use Analytical Jacobian from Geometry instead of Numerical
+        
         lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
         f_coriolis = 2.0 * OMEGA * np.sin(theta)
         
@@ -164,7 +166,7 @@ class CubedSphereSWEJax(BaseSolver):
         fg.g1_vec = jnp.array(g1_vec)
         fg.g2_vec = jnp.array(g2_vec)
         fg.g_inv = jnp.array(g_inv)
-        fg.sqrt_g = jnp.array(sqrt_g)
+        fg.sqrt_g = jnp.array(fg.sqrt_g) # Use existing analytical sqrt_g
         fg.f_coriolis = jnp.array(f_coriolis)
         
         # Store lon/lat for utility (NumPy or JAX, doesn't matter for JIT as config)
@@ -180,8 +182,8 @@ class CubedSphereSWEJax(BaseSolver):
         nbr_face, nbr_side, swap, reverse = self.topology.CONN_TABLE[(face_idx, side)]
         nbr_metrics = metrics_all[nbr_face]
         
-        # global_state: (6, 3, N, N)
-        nbr_U = global_state[nbr_face] # (3, N, N)
+        # global_state: (3, 6, N, N)
+        nbr_U = global_state[:, nbr_face, :, :] # (3, N, N)
         
         # Slicing
         # Static control flow (if/else) on `nbr_side` is fine since it's unrolled per face/side loop iteration.
@@ -248,10 +250,10 @@ class CubedSphereSWEJax(BaseSolver):
         for i in range(6):
             fg_m = metrics[i]
             
-            # Unpack Variables
-            m = global_state[i, 0]
-            u1_cov = global_state[i, 1]
-            u2_cov = global_state[i, 2]
+            # Unpack Variables (Layout: 3, 6, N, N)
+            m = global_state[0, i]
+            u1_cov = global_state[1, i]
+            u2_cov = global_state[2, i]
             
             h = m / fg_m['sqrt_g']
             g_inv = fg_m['g_inv']
@@ -282,10 +284,10 @@ class CubedSphereSWEJax(BaseSolver):
             S_2 = -fg_m['sqrt_g'] * u1_con * abs_vort
             
             # Volume Updates (Use .at[].set)
-            # rhs[i, 0] = ... -> rhs = rhs.at[i, 0].set(...)
-            rhs = rhs.at[i, 0].set(-(div_mass))
-            rhs = rhs.at[i, 1].set(-grad_E_1 + S_1)
-            rhs = rhs.at[i, 2].set(-grad_E_2 + S_2)
+            # rhs[0, i] = ... -> rhs = rhs.at[0, i].set(...)
+            rhs = rhs.at[0, i].set(-(div_mass))
+            rhs = rhs.at[1, i].set(-grad_E_1 + S_1)
+            rhs = rhs.at[2, i].set(-grad_E_2 + S_2)
             
             # 4. SAT / Numerical Flux
             for side in range(4):
@@ -355,7 +357,7 @@ class CubedSphereSWEJax(BaseSolver):
                 
                 # 4.3 SAT Mass
                 sat_mass = sat_coeff * (0.5 * (m_out * vn_out - m_in * vn) - 0.5 * wave_speed * (m_out - m_in))
-                rhs = rhs.at[i, 0, idx_2d[0], idx_2d[1]].add(-sat_mass)
+                rhs = rhs.at[0, i, idx_2d[0], idx_2d[1]].add(-sat_mass)
                 
                 # 4.4 SAT Momentum
                 u1_in = u1_cov[idx_2d]; u2_in = u2_cov[idx_2d]
@@ -373,8 +375,8 @@ class CubedSphereSWEJax(BaseSolver):
                 sat_u1 = sat_coeff * (0.5 * (F_u1_out - F_u1_in) - 0.5 * wave_speed * (u1_out_proj - u1_in)) 
                 sat_u2 = sat_coeff * (0.5 * (F_u2_out - F_u2_in) - 0.5 * wave_speed * (u2_out_proj - u2_in))
                 
-                rhs = rhs.at[i, 1, idx_2d[0], idx_2d[1]].add(-sat_u1)
-                rhs = rhs.at[i, 2, idx_2d[0], idx_2d[1]].add(-sat_u2)
+                rhs = rhs.at[1, i, idx_2d[0], idx_2d[1]].add(-sat_u1)
+                rhs = rhs.at[2, i, idx_2d[0], idx_2d[1]].add(-sat_u2)
                 
         return rhs
 
@@ -402,14 +404,15 @@ class CubedSphereSWEJax(BaseSolver):
             du = rk_a[k] * du + dt * rhs
             local_state = local_state + rk_b[k] * du
             
-        # Filter
-        mom = local_state[:, 1:3, :, :] # (6, 2, N, N)
+        # Filter Momentum Only (Indices 1 and 2 from Vars dim 0)
+        # Layout: (3, 6, N, N) -> slice (2, 6, N, N)
+        mom = local_state[1:3, :, :, :] 
         mom = mom @ filter_mat.T # Beta dim
         mom = jnp.swapaxes(mom, -1, -2) 
         mom = mom @ filter_mat.T # Alpha dim
         mom = jnp.swapaxes(mom, -1, -2)
         
-        local_state = local_state.at[:, 1:3, :, :].set(mom)
+        local_state = local_state.at[1:3, :, :, :].set(mom)
         return local_state
 
     def step(self, t: float, state: np.ndarray, dt: float) -> np.ndarray:
