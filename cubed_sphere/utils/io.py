@@ -51,6 +51,17 @@ class NetCDFMonitor:
 
         n_vars, n_faces, N, _ = state_reshaped.shape
         
+        # Validation for Cubed Sphere: Face dimension must be 6
+        if n_faces != 6:
+            # Check for potential Face-Major layout (Face, Var, N, N) where Face=6
+            if n_vars == 6:
+                # Auto-correction: Transpose (Face, Var, ...) -> (Var, Face, ...)
+                # print(f"Warning: Auto-transposing state from {state_reshaped.shape} to Var-Major layout")
+                state_reshaped = np.transpose(state_reshaped, (1, 0, 2, 3))
+                n_vars, n_faces, N, _ = state_reshaped.shape
+            else:
+                 raise ValueError(f"Invalid state shape {state.shape}. Expected 6 faces, got {n_faces}. Ensure layout is (n_vars, 6, N, N).")
+        
         mode = 'a' if self.initialized else 'w'
         
         try:

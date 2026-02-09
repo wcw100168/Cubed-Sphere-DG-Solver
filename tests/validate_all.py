@@ -92,6 +92,14 @@ def main():
         {
             "cmd": [python_exe, "examples/run_advection.py"],
             "desc": "End-to-End Smoke Test: Advection Solver"
+        },
+        {
+            "cmd": [python_exe, "examples/demo_custom_input.py"],
+            "desc": "Demo: Custom Input (Smoke Test)"
+        },
+        {
+            "cmd": [python_exe, "examples/demo_plotting.py"],
+            "desc": "Demo: Plotting (Smoke Test)"
         }
     ]
     

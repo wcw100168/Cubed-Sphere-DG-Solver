@@ -5,8 +5,12 @@ from cubed_sphere.geometry.grid import CubedSphereEquiangular, CubedSphereTopolo
 from cubed_sphere.utils import regrid
 
 def verify_wind_field():
-    print("\n--- Running Vector Field Regridding Verification ---")
-    
+    print("\n--- Running Vector Field Regridding Demo ---")
+    """
+    Demo for vector field regridding from Lat-Lon grid to Cubed Sphere.
+    Verifies metric tensor transformations.
+    """
+   
     # 1. Setup Ground Truth: Solid Body Rotation (Zonal Wind)
     # u_east = 40.0 m/s, v_north = 0.0
     u_ref = 40.0

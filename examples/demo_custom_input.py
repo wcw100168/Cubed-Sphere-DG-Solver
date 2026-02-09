@@ -1,15 +1,20 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
+import sys
+import os
+
+# Add project root to path
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 from cubed_sphere.solvers import CubedSphereAdvectionSolver, AdvectionConfig
+from cubed_sphere.solvers.swe import CubedSphereSWE, SWEConfig
 from cubed_sphere.utils import regrid
 from cubed_sphere.geometry.grid import CubedSphereEquiangular, lgl_nodes_weights
 
-def demo_functional_init():
-    print("\n--- Running Functional Initialization Demo ---")
-    
-    config = AdvectionConfig(N=32, CFL=1.0, T_final=0.0, backend='numpy')
-    solver = CubedSphereAdvectionSolver(config)
+def demo_functional_init(solver_type="advection"):
+    print(f"\n--- Running Functional Initialization Demo ({solver_type}) ---")
     
     # Define a custom function: Twin Gaussian
     def twin_gaussian(lon, lat):
@@ -23,27 +28,59 @@ def demo_functional_init():
         
         return val1 + val2
 
-    # Initialize
-    u0 = solver.get_initial_condition(type="custom", func=twin_gaussian)
+    if solver_type == "advection":
+        config = AdvectionConfig(N=32, CFL=1.0, T_final=0.0, backend='numpy')
+        solver = CubedSphereAdvectionSolver(config)
+        u0 = solver.get_initial_condition(type="custom", func=twin_gaussian)
+        plot_data = u0[0] # Face 1
+        
+    elif solver_type == "swe":
+        config = SWEConfig(N=8, T_final=0.0, backend='numpy')
+        solver = CubedSphereSWE(config)
+        
+        # Manual Initialization for System of Equations
+        # We need to construct state (3, 6, N+1, N+1)
+        num_nodes = config.N + 1
+        u0 = np.zeros((3, 6, num_nodes, num_nodes))
+        
+        # Apply Gaussian to Height (Var 0)
+        # We need to iterate faces to get lat/lon for the function
+        topo = solver._impl.topology
+        faces = solver._impl.faces
+        
+        for i, fname in enumerate(topo.FACE_MAP):
+            fg = faces[fname]
+            # Eval function
+            h_val = twin_gaussian(fg.lon, fg.lat)
+            # Multiply by sqrt_g (Mass variable)
+            u0[0, i] = h_val * fg.sqrt_g
+            # u0[1] and u0[2] remain zero (no velocity)
+            
+        plot_data = u0[0, 0] / faces[topo.FACE_MAP[0]].sqrt_g # Plot Height on Face 1
+    
     print(f"Initialized state with min={u0.min():.4f}, max={u0.max():.4f}")
     
     # Simple visualization stats
-    for i in range(6):
-        print(f"Face {i+1} Mean: {u0[i].mean():.4f}")
+    # Check shape to decide how to print mean
+    if u0.ndim == 3: # Advection (6, N, N)
+         print(f"Face 1 Mean: {u0[0].mean():.4f}")
+    elif u0.ndim == 4: # SWE (3, 6, N, N)
+         print(f"Face 1 Mean (Var 0): {u0[0, 0].mean():.4f}")
 
     # Plot (quick contour of one face if matplotlib is available)
     try:
         plt.figure()
-        plt.imshow(u0[0])
-        plt.title("Face 1 - Twin Gaussian")
+        plt.imshow(plot_data)
+        plt.title(f"Face 1 - Twin Gaussian ({solver_type})")
         plt.colorbar()
-        plt.savefig("demo_functional_init.png")
-        print("Saved plot to demo_functional_init.png")
+        plt.savefig(f"demo_functional_init_{solver_type}.png")
+        print(f"Saved plot to demo_functional_init_{solver_type}.png")
     except Exception as e:
         print(f"Plotting failed: {e}")
 
 def demo_regrid_init():
-    print("\n--- Running Regridding Initialization Demo ---")
+    # Only implemented for Advection in this demo for simplicity
+    print("\n--- Running Regridding Initialization Demo (Advection Only) ---")
     
     config = AdvectionConfig(N=32, T_final=0.0)
     solver = CubedSphereAdvectionSolver(config)
@@ -84,5 +121,10 @@ def demo_regrid_init():
         print(f"Plotting failed: {e}")
 
 if __name__ == "__main__":
-    demo_functional_init()
-    demo_regrid_init()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--solver", type=str, default="advection", choices=["advection", "swe"])
+    args = parser.parse_args()
+    
+    demo_functional_init(args.solver)
+    if args.solver == "advection":
+        demo_regrid_init()

@@ -21,11 +21,12 @@ from cubed_sphere.solvers.swe import CubedSphereSWE, SWEConfig
 def setup_case2_initial_condition(solver, config):
     """
     Sets up Williamson Case 2 (Global Steady State Zonal Flow).
-    Returns the initial state array (6, 3, N+1, N+1).
+    Returns the initial state array (3, 6, N+1, N+1).
     """
     # Grid size
     num_nodes = config.N + 1
-    state = np.zeros((6, 3, num_nodes, num_nodes))
+    # Use Var-Major layout: (Vars, Face, Xi, Eta)
+    state = np.zeros((3, 6, num_nodes, num_nodes))
     
     # Physics Parameters
     u0 = 2.0 * np.pi * config.R / (12.0 * 24.0 * 3600.0) # ~38 m/s
@@ -99,9 +100,9 @@ def setup_case2_initial_condition(solver, config):
         else:
              sqrt_g = fg.sqrt_g
              
-        state[i, 0] = h_val * sqrt_g
-        state[i, 1] = V_dot_g1
-        state[i, 2] = V_dot_g2
+        state[0, i] = h_val * sqrt_g
+        state[1, i] = V_dot_g1
+        state[2, i] = V_dot_g2
         
     return state
 
@@ -119,8 +120,9 @@ def compute_errors(final_state, exact_state, solver):
         else:
              sqrt_g = fg.sqrt_g
              
-        h_final = final_state[i, 0] / sqrt_g
-        h_exact = exact_state[i, 0] / sqrt_g
+        # Use Var-Major indexing [Var, Face]
+        h_final = final_state[0, i] / sqrt_g
+        h_exact = exact_state[0, i] / sqrt_g
         
         diff_h_all.append(np.ravel(h_final - h_exact))
         

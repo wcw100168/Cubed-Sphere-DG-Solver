@@ -196,10 +196,9 @@ class CubedSphereSWENumpy(BaseSolver):
         nbr_name = self.topology.FACE_MAP[nbr_face]
         nbr_fg = self.faces[nbr_name]
         
-        # Shape: (3, N, N) -> We assume state is (6, 3, N, N) passed in as (3, N, N) slice?
-        # No, compute_rhs receives global_state (6, 3, N, N) usually.
-        # But this function argument 'global_state' suggests the full array.
-        nbr_U = global_state[nbr_face] # (3, N, N)
+        # Correctly access state for neighbor face in Var-Major layout (Vars, Face, Xi, Eta)
+        # global_state shape is (3, 6, N, N)
+        nbr_U = global_state[:, nbr_face, :, :] # (3, N, N)
         
         # Convention: Dim 1 = Alpha (X), Dim 2 = Beta (Y)
         # Note: state shape is (3, N, N). Dim 1 is Alpha?
@@ -252,7 +251,7 @@ class CubedSphereSWENumpy(BaseSolver):
     def compute_rhs(self, t: float, global_state: np.ndarray) -> np.ndarray:
         """
         Compute du/dt for the Shallow Water Equations.
-        Global State: (6, 3, N+1, N+1)
+        Global State: (3, 6, N+1, N+1)  [Var-Major]
         """
         rhs = np.zeros_like(global_state)
         scale = 4.0 / np.pi
@@ -264,10 +263,10 @@ class CubedSphereSWENumpy(BaseSolver):
         for i, fname in enumerate(self.topology.FACE_MAP):
             fg = self.faces[fname]
             
-            # Unpack Variables (3, N, N)
-            m = global_state[i, 0]
-            u1_cov = global_state[i, 1]
-            u2_cov = global_state[i, 2]
+            # Unpack Variables (3, N, N) from Var-Major state
+            m = global_state[0, i]
+            u1_cov = global_state[1, i]
+            u2_cov = global_state[2, i]
             
             h = m / fg.sqrt_g
             
@@ -297,9 +296,9 @@ class CubedSphereSWENumpy(BaseSolver):
             S_1 = fg.sqrt_g * u2_con * abs_vort
             S_2 = -fg.sqrt_g * u1_con * abs_vort
             
-            rhs[i, 0] = -(div_mass)
-            rhs[i, 1] = -grad_E_1 + S_1
-            rhs[i, 2] = -grad_E_2 + S_2
+            rhs[0, i] = -(div_mass)
+            rhs[1, i] = -grad_E_1 + S_1
+            rhs[2, i] = -grad_E_2 + S_2
             
             # 4. SAT / Numerical Flux (Boundaries)
             for side in range(4):
@@ -384,7 +383,7 @@ class CubedSphereSWENumpy(BaseSolver):
                 
                 # 4.3 SAT Mass
                 sat_mass = sat_coeff * (0.5 * (m_out * vn_out - m_in * vn) - 0.5 * wave_speed * (m_out - m_in))
-                rhs[i, 0][idx_2d] -= sat_mass
+                rhs[0, i][idx_2d] -= sat_mass
                 
                 # 4.4 SAT Momentum (Energy Flux)
                 u1_in = u1_cov[idx_2d]; u2_in = u2_cov[idx_2d]
@@ -405,8 +404,8 @@ class CubedSphereSWENumpy(BaseSolver):
                 sat_u1 = sat_coeff * (0.5 * (F_u1_out - F_u1_in) - 0.5 * wave_speed * (u1_out_proj - u1_in)) 
                 sat_u2 = sat_coeff * (0.5 * (F_u2_out - F_u2_in) - 0.5 * wave_speed * (u2_out_proj - u2_in))
                 
-                rhs[i, 1][idx_2d] -= sat_u1
-                rhs[i, 2][idx_2d] -= sat_u2
+                rhs[1, i][idx_2d] -= sat_u1
+                rhs[2, i][idx_2d] -= sat_u2
                 
         return rhs
 
@@ -431,12 +430,12 @@ class CubedSphereSWENumpy(BaseSolver):
             local_state += self.rk_b[k] * du
             
         # 2. Filter (Momentum Only)
-        # state is (6, 3, N, N). We filter indices 1 and 2.
+        # state is (3, 6, N, N) [Var-Major]. We filter indices 1 and 2.
         # Tensor product: F @ U @ F.T apply along last two dims
         # F is (Nodes, Nodes).
         
-        # Slice momentum: (6, 2, N, N)
-        mom = local_state[:, 1:3, :, :]
+        # Slice momentum: (2, 6, N, N)
+        mom = local_state[1:3, :, :, :]
         
         # Apply F on last axis (Dimension Beta)
         # mom @ F.T
@@ -444,16 +443,7 @@ class CubedSphereSWENumpy(BaseSolver):
         
         # Apply F on second to last axis (Dimension Alpha)
         # We want F @ mom_slice. 
-        # Swap axes to put Alpha last? Or use matmul semantics.
-        # Matmul ...ij, jk -> ...ik
-        # We want (F @ mom_slice).
-        # F is (N, N). mom is (..., N, N).
-        # We can treat mom as stack of matrices.
-        # mom = (6, 2, N, N).
-        # F @ mom is not broadcasting right.
-        # We want F @ column_vec.
-        # Let's use swapaxes
-        # Move Alpha to last: (6, 2, Beta, Alpha)
+        # Swap axes to put Alpha last: (2, 6, Beta, Alpha)
         mom = np.swapaxes(mom, -1, -2) 
         # Apply F to Alpha
         mom = mom @ self.filter_matrix.T
@@ -461,7 +451,7 @@ class CubedSphereSWENumpy(BaseSolver):
         mom = np.swapaxes(mom, -1, -2)
         
         # Update state
-        local_state[:, 1:3, :, :] = mom
+        local_state[1:3, :, :, :] = mom
         
         return local_state
 
