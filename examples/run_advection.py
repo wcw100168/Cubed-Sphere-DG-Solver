@@ -14,12 +14,24 @@ def main():
     # Configuration
     backend = os.environ.get('CUBED_SPHERE_BACKEND', 'numpy')
     print(f"Running Advection with backend: {backend}")
+    
+    # 1. Physics Parameters
+    u_max = 2 * np.pi # Maximum velocity (Solid Body Rotation)
+    N = 24
+    target_cfl = 1.0 # Advection can often handle CFL~1 with RK strong stability
+    
+    # 2. Dynamic Time Step (Stability ~ 1/N^2)
+    # dt = CFL / (v_max * N^2)
+    dt = target_cfl / (u_max * N**2)
+    print(f"Computed dt: {dt:.5f} (N={N}, u_max={u_max:.2f}, CFL={target_cfl})")
+    
     config = AdvectionConfig(
-        N=24,
+        N=N,
         R=1.0,
-        u0=2 * np.pi,
+        u0=u_max,
         alpha0=0.0,
-        CFL=1.0,
+        CFL=target_cfl,
+        dt=dt, # Explicitly valid stability condition
         T_final=1.0,
         backend=backend
     )

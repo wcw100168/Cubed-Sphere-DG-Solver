@@ -21,32 +21,49 @@ def main():
     # 1. Setup Simulation
     if args.solver == "advection":
         print("Initializing Advection Solver...")
+        # Auto-compute dt
+        N = 16
+        R = 1.0
+        u0 = 2.0 * np.pi
+        target_cfl = 0.5
+        dt = target_cfl * R / (u0 * N**2) # Stability Condition
+        
         config = AdvectionConfig(
-            N=16, R=1.0, u0=2.0 * np.pi, CFL=0.5,
-            T_final=0.2, backend='numpy'
+            N=N, R=R, u0=u0, CFL=target_cfl,
+            T_final=0.2, dt=dt, backend='numpy'
         )
         solver = CubedSphereAdvectionSolver(config)
-        u0 = solver.get_initial_condition(type="gaussian")
+        u0_state = solver.get_initial_condition(type="gaussian")
         var_name_plot = "Concentration"
         
     elif args.solver == "swe":
         print("Initializing SWE Solver...")
-        # Reduce dt slightly for stability in explicit demo
+        # Auto-compute dt
+        N = 8
+        H = 10000.0
+        g = 9.80616
+        R = 6.371e6
+        c_wave = np.sqrt(g * H)
+        v_flow = 40.0 # approx
+        v_max = c_wave + v_flow
+        target_cfl = 0.5
+        dt = target_cfl * R / (v_max * N**2)
+        
         config = SWEConfig(
-            N=8, T_final=0.1, dt=0.005, backend='numpy'
+            N=N, T_final=0.1, dt=dt, backend='numpy'
         )
         solver = CubedSphereSWE(config)
-        u0 = solver.get_initial_condition(type="case2")
+        u0_state = solver.get_initial_condition(type="case2")
         var_name_plot = "Fluid Depth (h)"
     
     # 2. Attach Monitor
     filename = "simulation_data.nc"
     # Save frequently to get frames
-    monitor = NetCDFMonitor(filename, save_interval=0.02)
+    monitor = NetCDFMonitor(filename, save_interval=dt*10)
     
     # 3. Run with Callback
-    print(f"Running {args.solver} simulation with I/O monitor...")
-    solver.solve((0.0, config.T_final), u0, callbacks=[monitor])
+    print(f"Running {args.solver} simulation with I/O monitor (dt={dt:.4e})...")
+    solver.solve((0.0, config.T_final), u0_state, callbacks=[monitor])
     
     # 4. Render Offline
     output_mp4 = f"{args.solver}_movie.mp4"
