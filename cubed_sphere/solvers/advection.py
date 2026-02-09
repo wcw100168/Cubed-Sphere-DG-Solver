@@ -334,6 +334,43 @@ class CubedSphereAdvectionSolver(BaseSolver):
             
         return local_state
 
+    def step(self, t: float, state: np.ndarray, dt: float = None) -> np.ndarray:
+        """
+        Advances the state by one time step.
+        Args:
+            t (float): Current simulation time.
+            state (array): Current state array.
+            dt (float, optional): Time step size. If None, use internal default.
+        Returns:
+            new_state (array): The state after one step.
+        """
+        if dt is None:
+            # Estimate dt (simple constant dt based on CFL)
+            dt = (self.cfg.CFL / self.cfg.u0) * (2 / self.cfg.N**2)
+
+        if self.use_jax:
+             return self._jit_step(state, dt)
+
+        # NumPy implementation
+        local_state = state.copy()
+        du = np.zeros_like(local_state)
+        
+        for k in range(5):
+            rhs = self._compute_rhs_numpy(t, local_state)
+            
+            # Update du (Residual) In-Place
+            if self.rk_a[k] == 0.0:
+                np.multiply(rhs, dt, out=du)
+            else:
+                du *= self.rk_a[k]
+                rhs *= dt
+                du += rhs
+            
+            # Update State In-Place
+            local_state += self.rk_b[k] * du
+            
+        return local_state
+
     def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:
         """
         Run simulation from t_span[0] to t_span[1] starting with initial_state.
@@ -342,7 +379,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
         if self.use_jax:
              return self._solve_jax(t_span, initial_state, callbacks)
         
-        # === NumPy Implementation (In-Place Optimized) ===
+        # === NumPy Implementation ===
         t_start, t_end = t_span
         current_time = t_start
         
@@ -353,7 +390,6 @@ class CubedSphereAdvectionSolver(BaseSolver):
         print(f"N={self.cfg.N}, CFL={self.cfg.CFL}, dt={dt_est:.5f}, T_span={t_span}")
         
         state = initial_state.copy()
-        du = np.zeros_like(state)
         step_count = 0
         epsilon = 1e-12
         
@@ -369,19 +405,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
             else:
                 step_dt = dt_est
             
-            for k in range(5):
-                rhs = self._compute_rhs_numpy(current_time, state)
-                
-                # Update du (Residual) In-Place
-                if self.rk_a[k] == 0.0:
-                    np.multiply(rhs, step_dt, out=du)
-                else:
-                    du *= self.rk_a[k]
-                    rhs *= step_dt
-                    du += rhs
-                
-                # Update State In-Place
-                state += self.rk_b[k] * du
+            state = self.step(current_time, state, step_dt)
             
             current_time += step_dt
             step_count += 1

@@ -15,6 +15,19 @@ class BaseSolver(ABC):
     def compute_rhs(self, t: float, state: np.ndarray) -> np.ndarray:
         """Compute the right-hand side (RHS) of the PDE: d(state)/dt = RHS."""
         pass
+
+    @abstractmethod
+    def step(self, t: float, state: np.ndarray, dt: float = None) -> np.ndarray:
+        """
+        Advances the state by one time step.
+        Args:
+            t (float): Current simulation time.
+            state (array): Current state array.
+            dt (float, optional): Time step size. If None, use internal default.
+        Returns:
+            new_state (array): The state after one step.
+        """
+        pass
         
     @abstractmethod
     def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:
