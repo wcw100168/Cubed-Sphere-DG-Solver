@@ -30,3 +30,9 @@ dev = [
     "black",
     "mypy"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cubed_sphere*"]  # 明確指定只包含主套件
+exclude = ["tutorials*", "tests*", "examples*", "docs*"] # 明確排除其他資料夾
+namespaces = false
