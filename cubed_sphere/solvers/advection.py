@@ -15,6 +15,7 @@ class AdvectionConfig:
     T_final: float = 1.0     # Final time
     backend: str = 'numpy'   # 'numpy' or 'jax'
     n_vars: int = 1          # Number of variables/species
+    dt: Optional[float] = None # Time step (Optional)
 
 class CubedSphereAdvectionSolver(BaseSolver):
     """
