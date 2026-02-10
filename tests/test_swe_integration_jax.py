@@ -46,9 +46,9 @@ class TestSWEIntegrationJax(unittest.TestCase):
         # Physics Parameters for Case 2
         u0 = 2.0 * np.pi * self.config.R / (12.0 * 24.0 * 3600.0) 
         
-        # Initialize State: (6, 3, N+1, N+1)
+        # Initialize State: (3, 6, N+1, N+1) (Variables, Faces, Xi, Eta)
         grid_size = self.config.N + 1
-        state = np.zeros((6, 3, grid_size, grid_size))
+        state = np.zeros((3, 6, grid_size, grid_size))
         
         R = self.config.R
         Omega = self.config.Omega
@@ -100,9 +100,10 @@ class TestSWEIntegrationJax(unittest.TestCase):
             
             u1, u2 = get_contravariant_simple(fg, u_sph, v_sph)
             
-            state[i, 0] = h
-            state[i, 1] = u1
-            state[i, 2] = u2
+            # Correct Layout: (Var, Face) 
+            state[0, i] = h
+            state[1, i] = u1
+            state[2, i] = u2
             
         def calc_mass(s):
             mass = 0.0
@@ -114,7 +115,8 @@ class TestSWEIntegrationJax(unittest.TestCase):
                 walpha = np.array(fg.walpha)
                 wbeta = np.array(fg.wbeta)
                 w = walpha[:, None] * wbeta[None, :]
-                mass += np.sum(s[k, 0] * sqrt_g * w)
+                # Layout: s[Var, Face, ...]
+                mass += np.sum(s[0, k] * sqrt_g * w)
             return mass
 
         initial_mass = calc_mass(state)
@@ -122,7 +124,9 @@ class TestSWEIntegrationJax(unittest.TestCase):
         # Run Simulation
         dt = 10.0
         t = 0.0
-        n_steps = 20 # Shorter for JAX checking logic correct vs speed
+        # Reduce n_steps to ensure stability in testing environment or check logic
+        # If dt=10 and stable, 20 steps is fine.
+        n_steps = 20 
         
         current_state = solver.solve((0.0, dt * n_steps), state) 
         # Note: solve returns numpy array per our implementation
@@ -130,7 +134,8 @@ class TestSWEIntegrationJax(unittest.TestCase):
         # Analysis
         final_mass = calc_mass(current_state)
         mass_diff = abs(final_mass - initial_mass)
-        h_error = np.max(np.abs(current_state[:, 0] - state[:, 0]))
+        # Check Error dims: state is (3, 6, ...)
+        h_error = np.max(np.abs(current_state[0] - state[0]))
         
         print(f"\nJAX Integration Results (N={self.config.N}, Steps={n_steps}):")
         print(f"  Mass Error (Abs): {mass_diff:.5e}")

@@ -1,6 +1,15 @@
 from cubed_sphere.solvers import CubedSphereAdvectionSolver, AdvectionConfig
 from cubed_sphere.utils import plot_cubed_sphere_state
 import numpy as np
+import os
+
+# Enable JAX x64 (Recommend for stability)
+os.environ["JAX_PLATFORMS"] = "cpu" # Default to CPU for consistency
+try:
+    import jax
+    jax.config.update("jax_enable_x64", True)
+except ImportError:
+    pass
 
 def main():
     # 1. 配置 (Backend='jax')
