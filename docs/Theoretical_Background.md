@@ -76,6 +76,7 @@ To accurately handle non-linear planetary dynamics, we use the **Vector Invarian
 $$
 \frac{\partial}{\partial t}(\sqrt{g} h) + \nabla \cdot (\sqrt{g} h \mathbf{u}) = 0
 $$
+
 2. **Momentum (Covariant components):**
 
 
