@@ -5,7 +5,7 @@
 [![Backend](https://img.shields.io/badge/Backend-NumPy%20%7C%20JAX-orange)](https://github.com/google/jax)
 [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/01_Introduction_Advection.ipynb)
 
-A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion equations on the Cubed-Sphere geometry. Designed with a PyTorch-like stateless API, this package enables seamless switching between **NumPy (CPU)** and **JAX (GPU/TPU)** backends for optimal performance.
+A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion and shallow water equations on the Cubed-Sphere geometry. Designed with a PyTorch-like stateless API, this package enables seamless switching between **NumPy (CPU)** and **JAX (GPU/TPU)** backends for optimal performance.
 
 ## Key Features
 
@@ -19,9 +19,9 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion eq
 ## Supported Models
 
 1.  **Scalar Advection**: Transport of a passive scalar field driven by a prescribed wind velocity. Fully supported on both NumPy and JAX backends.
-2.  **Shallow Water Equations (SWE)**: Solves the full non-linear shallow water equations using the Vector Invariant Formulation. Supports Rossby-Haurwitz waves (Case 2) and other planetary dynamics.
-    *   **NumPy Backend**: Reference implementation with rigorous stability checks.
-    *   **JAX Backend**: Fully functional and verified against NumPy backend (consistency < 1e-15). Recommended for high-resolution simulations and massive parallelization.
+2.  **Shallow Water Equations (SWE)**: Solves the full non-linear shallow water equations using the Vector Invariant Formulation.
+    * **NumPy Backend**: Reference implementation with rigorous stability checks.
+    * **JAX Backend**: Fully functional and verified against NumPy backend (consistency < 1e-15). Recommended for high-resolution simulations and massive parallelization.
 
 ## Theoretical Background
 
@@ -37,11 +37,17 @@ Cubed-Sphere-DG-Solver/
 │   ├── geometry/          # Grid generation and metric tensors
 │   ├── numerics/          # LGL nodes, weights, and D-matrices
 │   ├── solvers/           # Time integration loops and PDE operators
-│   └── utils/             # Visualization and I/O tools
-├── docs/                  # Documentation and reports
+│   └── utils/             # Visualization, I/O, and Regridding tools
+├── docs/                  # Documentation and technical reports
+│   ├── Theoretical_Background.md
+│   ├── ACCURACY_REPORT.md
+│   └── VALIDATION_REPORT.md
 ├── examples/              # Usage examples and demos
-├── tutorials/             # Jupyter Notebook tutorials
-├── tests/                 # Unit tests for conservation and accuracy
+├── tutorials/             # Jupyter Notebook tutorials (Step-by-step)
+├── tests/                 # Unit tests for CI/CD
+├── validation/            # Scientific verification cases (Williamson/Nair)
+│   ├── advection/         # Case 1 (Solid Body), Deformational Flow
+│   └── swe/               # Case 2 (Steady State), Case 6 (Rossby Wave)
 ├── pyproject.toml         # Package configuration
 └── README.md              # Project documentation
 ```
@@ -53,7 +59,7 @@ Cubed-Sphere-DG-Solver/
 Clone the repository and install it in editable mode:
 
 ```bash
-git clone https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git
+git clone [https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git](https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git)
 cd Cubed-Sphere-DG-Solver
 pip install -e .
 ```
@@ -99,14 +105,25 @@ New to the Cubed Sphere? Check out our interactive tutorials:
 | **02. Shallow Water Eq** | Advanced Physics: Williamson Case 2 & Stability | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/02_Shallow_Water_Equations.ipynb) |
 | **03. Data Workflow** | Production: High-Level API, I/O & Regridding | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/03_Data_Pipeline_and_IO.ipynb) |
 
+## Validation Suite
+
+The `validation/` directory contains formal verification scripts based on standard atmospheric modeling benchmarks. These ensure the solver is physically correct.
+
+- **Advection**: Williamson Case 1 (Solid Body Rotation), Nair Deformational Flow.
+- **Shallow Water**: Williamson Case 2 (Geostrophic Balance), Williamson Case 6 (Rossby-Haurwitz Wave).
+
+See `validation/README.md` for details on how to run these tests and expected results.
+
 ## Examples
 
 The `examples/` directory contains complete scripts for testing and demos:
 
-*   **`run_swe_convergence.py`**: A rigorous convergence test for the Shallow Water Solver, verifying spectral accuracy orders across $N=8 \sim 32$.
-*   **`demo_jax_acceleration.py`**: Explicitly demonstrates how to enable JIT compilation and running on GPUs/TPUs.
-*   **`demo_offline_io.py`**: A full production pipeline example: Simulation $\to$ NetCDF Storage $\to$ MP4 Animation.
-*   **`run_advection.py`**: The standard "Hello World" advection demo.
+- **run_advection.py**: The standard "Hello World" advection demo.
+- **run_swe_convergence.py**: A rigorous convergence test for the Shallow Water Solver.
+- **demo_jax_acceleration.py**: Demonstrates JIT compilation and GPU execution.
+- **demo_offline_io.py**: A production pipeline: Simulation $\to$ NetCDF $\to$ Animation.
+- **demo_vector_regridding.py**: Shows how to remap vector fields (Wind U, V) between Lat-Lon and Cubed-Sphere grids.
+- **demo_custom_input.py**: Demonstrates initializing the solver with custom NumPy arrays/data.
 
 ## Backend Switching
 
