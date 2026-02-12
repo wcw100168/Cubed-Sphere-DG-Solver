@@ -3,6 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Backend](https://img.shields.io/badge/Backend-NumPy%20%7C%20JAX-orange)](https://github.com/google/jax)
+[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/01_Introduction_Advection.ipynb)
 
 A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion equations on the Cubed-Sphere geometry. Designed with a PyTorch-like stateless API, this package enables seamless switching between **NumPy (CPU)** and **JAX (GPU/TPU)** backends for optimal performance.
 
@@ -18,15 +19,13 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion eq
 ## Supported Models
 
 1.  **Scalar Advection**: Transport of a passive scalar field driven by a prescribed wind velocity. Fully supported on both NumPy and JAX backends.
-2.  **Linearized Shallow Water Equations (LSWE)**: Wave propagation on a rotating sphere, solving for height ($h$) and velocity ($u, v$).
-    *   **NumPy Backend**: Fully verified and stable conservation properties.
-    *   **JAX Backend**: *Experimental*. Currently unstable for long-term integration due to numerical issues in the flux formulation. Use for research or short-term dynamics only.
+2.  **Shallow Water Equations (SWE)**: Solves the full non-linear shallow water equations using the Vector Invariant Formulation. Supports Rossby-Haurwitz waves (Case 2) and other planetary dynamics.
+    *   **NumPy Backend**: Reference implementation with rigorous stability checks.
+    *   **JAX Backend**: Fully functional and verified against NumPy backend (consistency < 1e-15). Recommended for high-resolution simulations and massive parallelization.
 
 ## Theoretical Background
 
 For a detailed explanation of the mathematical formulation, including the Discontinuous Galerkin method, weak form derivation, and Cubed Sphere geometry metrics, please refer to the [Theoretical Background](docs/Theoretical_Background.md).
-
-*(Note: Theory documentation is currently in progress)*
 
 ## Project Structure
 
@@ -34,17 +33,18 @@ For a detailed explanation of the mathematical formulation, including the Discon
 Cubed-Sphere-DG-Solver/
 ├── benchmarks/            # Scripts for performance comparison (NumPy vs JAX)
 ├── cubed_sphere/          # Main package source code
-│   ├── backend.py         # Backend dispatch logic (NumPy/JAX abstraction)
-│   ├── geometry/          # Grid generation, metric tensors, and coordinate transforms
-│   ├── numerics/          # LGL nodes, weights, and differentiation matrices
+│   ├── backend.py         # Backend dispatch logic
+│   ├── geometry/          # Grid generation and metric tensors
+│   ├── numerics/          # LGL nodes, weights, and D-matrices
 │   ├── solvers/           # Time integration loops and PDE operators
-│   └── utils/             # Visualization tools and helper functions
+│   └── utils/             # Visualization and I/O tools
 ├── docs/                  # Documentation and reports
-├── examples/              # Usage examples and run scripts
-├── tests/                 # Unit tests for conservation and numerical accuracy
-├── pyproject.toml         # Package configuration and dependencies
+├── examples/              # Usage examples and demos
+├── tutorials/             # Jupyter Notebook tutorials
+├── tests/                 # Unit tests for conservation and accuracy
+├── pyproject.toml         # Package configuration
 └── README.md              # Project documentation
-````
+```
 
 ## Installation
 
@@ -68,9 +68,6 @@ pip install jax jaxlib jax-metal
 
 # For Linux (NVIDIA GPU / CUDA 12)
 pip install "jax[cuda12]"
-
-# For CPU only (if GPU is not available)
-pip install "jax[cpu]"
 ```
 
 ## Quick Start
@@ -79,9 +76,8 @@ You can run a complete advection simulation in just a few lines of code:
 
 ```python
 from cubed_sphere.solvers import CubedSphereAdvectionSolver, AdvectionConfig
-from cubed_sphere.utils import plot_cubed_sphere_state
 
-# 1. Configure parameters (N=32, T=1.0)
+# 1. Configure parameters (N=32, CFL=1.0)
 config = AdvectionConfig(N=32, CFL=1.0, T_final=1.0, backend='numpy')
 
 # 2. Initialize solver and initial condition
@@ -90,52 +86,38 @@ u0 = solver.get_initial_condition(type="gaussian")
 
 # 3. Run simulation (Time stepping is handled automatically)
 final_state = solver.solve((0.0, 1.0), u0)
-
 print("Simulation Complete!")
 ```
 
-See `examples/run_advection.py` for a full example including visualization.
+## Tutorials
+
+New to the Cubed Sphere? Check out our interactive tutorials:
+
+| Tutorial | Description | Link |
+| :--- | :--- | :--- |
+| **01. Introduction** | Getting Started: Scalar Advection & Visualization | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/01_Introduction_Advection.ipynb) |
+| **02. Shallow Water Eq** | Advanced Physics: Williamson Case 2 & Stability | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/02_Shallow_Water_Equations.ipynb) |
+| **03. Data Workflow** | Production: High-Level API, I/O & Regridding | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/tutorials/03_Data_Pipeline_and_IO.ipynb) |
+
+## Examples
+
+The `examples/` directory contains complete scripts for testing and demos:
+
+*   **`run_swe_convergence.py`**: A rigorous convergence test for the Shallow Water Solver, verifying spectral accuracy orders across $N=8 \sim 32$.
+*   **`demo_jax_acceleration.py`**: Explicitly demonstrates how to enable JIT compilation and running on GPUs/TPUs.
+*   **`demo_offline_io.py`**: A full production pipeline example: Simulation $\to$ NetCDF Storage $\to$ MP4 Animation.
+*   **`run_advection.py`**: The standard "Hello World" advection demo.
 
 ## Backend Switching
 
-This package supports two computational backends:
-
-### NumPy (Default, CPU)
-
-Best for debugging, development, and small-scale testing. Optimized using in-place operations to minimize memory allocation.
+Switching between NumPy and JAX is as simple as changing a string in the config:
 
 ```python
-config = AdvectionConfig(..., backend='numpy')
+# Use CPU (NumPy)
+config_cpu = SWEConfig(..., backend='numpy')
+
+# Use GPU (JAX) - Zero code changes required in your model!
+config_gpu = SWEConfig(..., backend='jax')
 ```
 
-### JAX (High-Performance, GPU/TPU)
-
-Best for large-scale, high-resolution simulations. Leverages JIT (Just-In-Time) compilation and XLA to run on accelerators.
-
-```python
-config = AdvectionConfig(..., backend='jax')
-```
-
-## Testing & Benchmarks
-
-### Numerical Accuracy
-
-The solver demonstrates **spectral convergence**, with $L_2$ errors decreasing exponentially as $N$ increases. Under optimal CFL conditions, the solution accuracy reaches approximately **1e-12** (close to machine precision).
-
-Detailed convergence tables for varying CFL numbers (0.5, 1.0, 2.0) can be found in the [Accuracy Report](docs/ACCURACY_REPORT.md).
-
-To verify these results or run unit tests:
-
-```bash
-python -m unittest discover tests
-```
-
-### Performance Benchmarks
-
-To compare JAX vs NumPy performance on your hardware:
-
-```bash
-python benchmarks/run_benchmark.py
-```
-
-For detailed performance analysis and charts, please see the [Benchmark Report](docs/BENCHMARK_REPORT.md).
+The underlying state tensors (`numpy.ndarray` vs `jax.Array`) are handled automatically by the solver facade.
