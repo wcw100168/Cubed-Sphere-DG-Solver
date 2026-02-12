@@ -228,7 +228,104 @@ class CubedSphereSWENumpy(BaseSolver):
                 
                 state[1, i] = b1
                 state[2, i] = b2
+            return state
+
+        elif type == "case6":
+            # Williamson Case 6: Rossby-Haurwitz Wave
+            # Parameters
+            omega = kwargs.get('omega', 7.848e-6)
+            K = kwargs.get('K', 7.848e-6)
+            R_wave = kwargs.get('R_wave', 4.0)
+            h0_c6 = kwargs.get('h0', 8000.0)
+            
+            # Constants
+            R_earth = self.config['R'] # Radius
+            Omega = self.config['Omega']
+            g = self.config['gravity']
+            
+            for i, fname in enumerate(self.topology.FACE_MAP):
+                fg = self.faces[fname]
                 
+                # Coordinates
+                lam = fg.lon
+                th = fg.lat
+                
+                sin_lat = np.sin(th)
+                cos_lat = np.cos(th)
+                cos_Rlam = np.cos(R_wave * lam)
+                sin_Rlam = np.sin(R_wave * lam)
+                cos_2Rlam = np.cos(2.0 * R_wave * lam)
+                
+                # Height Field Functions (A, B, C)
+                # A(theta)
+                # term1 = (w/2)*(2*Om + w)*cos^2(th)
+                # term2 = (1/4)*K^2 * cos^(2R)(th) * [...]
+                # Ref: Williamson (1992) Eq 4.6
+                t1 = (omega / 2.0) * (2.0 * Omega + omega) * (cos_lat**2)
+                
+                # Numerically safe computation for t2 to avoid pole singularity cos^(-2)
+                # Expand cos^(2R) into the bracket terms:
+                # [ (R+1)cos^2 + (2R^2 - R - 2) - 2R^2 cos^(-2) ] * cos^(2R)
+                # = (R+1)cos^(2R+2) + (2R^2 - R - 2)cos^(2R) - 2R^2 cos^(2R-2)
+                
+                c2R = cos_lat**(2*R_wave)
+                c2R_plus2 = cos_lat**(2*R_wave + 2)
+                c2R_minus2 = cos_lat**(2*R_wave - 2)
+                
+                t2 = 0.25 * K**2 * (
+                    (R_wave + 1) * c2R_plus2 + 
+                    (2 * R_wave**2 - R_wave - 2) * c2R - 
+                    2 * R_wave**2 * c2R_minus2
+                )
+                A = t1 + t2
+                
+                # B(theta) - Eq 4.7
+                # term = (2*(Om+w)*K) / ((R+1)(R+2)) * cos^R(th) * [...]
+                b_num = 2.0 * (Omega + omega) * K
+                b_den = (R_wave + 1) * (R_wave + 2)
+                b_brack = ( (R_wave**2 + 2*R_wave + 2) - (R_wave+1)**2 * cos_lat**2 )
+                B = (b_num / b_den) * (cos_lat**R_wave) * b_brack
+                
+                # C(theta) - Eq 4.8
+                # term = (1/4)*K^2 * cos^(2R)(th) * [ (R+1)cos^2(th) - (R+2) ]
+                c_brack = (R_wave + 1) * cos_lat**2 - (R_wave + 2)
+                C = 0.25 * K**2 * c2R * c_brack
+                
+                # Total Height h
+                # gh = gh0 + a^2 A + a^2 B cos(R lam) + a^2 C cos(2R lam)
+                gh = g * h0_c6 + (R_earth**2) * (A + B * cos_Rlam + C * cos_2Rlam)
+                h = gh / g
+                
+                # Store Mass: h * sqrt_g
+                state[0, i] = h * fg.sqrt_g
+                
+                # Velocity Field
+                # u_sph = a*w*cos(th) + a*K*cos^(R-1)(th) * (R*sin^2(th) - cos^2(th)) * cos(R*lam)
+                # v_sph = -a*K*R * cos^(R-1)(th) * sin(th) * sin(R*lam)
+                
+                u_term1 = R_earth * omega * cos_lat
+                u_term2 = R_earth * K * (cos_lat**(R_wave-1)) * (R_wave * sin_lat**2 - cos_lat**2) * cos_Rlam
+                u_sph = u_term1 + u_term2
+                
+                v_sph = -R_earth * K * R_wave * (cos_lat**(R_wave-1)) * sin_lat * sin_Rlam
+                
+                # Project to Covariant
+                # Convert to Cartesian V
+                sin_lam, cos_lam = np.sin(lam), np.cos(lam)
+                # e_lam = (-sin(lon), cos(lon), 0)
+                # e_th = (-sin(lat)cos(lon), -sin(lat)sin(lon), cos(lat))
+                
+                Vx = u_sph * (-sin_lam) + v_sph * (-sin_lat * cos_lam)
+                Vy = u_sph * (cos_lam)  + v_sph * (-sin_lat * sin_lam)
+                Vz = u_sph * (0.0)      + v_sph * (cos_lat)
+                
+                # Covariant u_1, u_2 = V . g_1, V . g_2
+                b1 = Vx*fg.g1_vec[...,0] + Vy*fg.g1_vec[...,1] + Vz*fg.g1_vec[...,2]
+                b2 = Vx*fg.g2_vec[...,0] + Vy*fg.g2_vec[...,1] + Vz*fg.g2_vec[...,2]
+                
+                state[1, i] = b1
+                state[2, i] = b2
+
             return state
         
         else:

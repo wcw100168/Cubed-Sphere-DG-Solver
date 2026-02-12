@@ -231,10 +231,10 @@ class CubedSphereAdvectionSolver(BaseSolver):
             # Calculate penalties for the 4 edges of THIS face
             # Note: get_neighbor_data now returns (..., edge_len)
             
-            p_west = sat(-fg.u1[0, :], phi[..., 0, :], self.topology.get_neighbor_data(global_phi, i, 0), fg.sqrt_g[0, :] * fg.walpha[0])
-            p_east = sat(fg.u1[-1, :], phi[..., -1, :], self.topology.get_neighbor_data(global_phi, i, 1), fg.sqrt_g[-1, :] * fg.walpha[-1])
-            p_south = sat(-fg.u2[:, 0], phi[..., :, 0], self.topology.get_neighbor_data(global_phi, i, 2), fg.sqrt_g[:, 0] * fg.wbeta[0])
-            p_north = sat(fg.u2[:, -1], phi[..., :, -1], self.topology.get_neighbor_data(global_phi, i, 3), fg.sqrt_g[:, -1] * fg.wbeta[-1])
+            p_west = sat(-fg.u1[0, :], phi[..., 0, :], self.topology.get_neighbor_data(global_phi, i, 0), fg.walpha[0])
+            p_east = sat(fg.u1[-1, :], phi[..., -1, :], self.topology.get_neighbor_data(global_phi, i, 1), fg.walpha[-1])
+            p_south = sat(-fg.u2[:, 0], phi[..., :, 0], self.topology.get_neighbor_data(global_phi, i, 2), fg.wbeta[0])
+            p_north = sat(fg.u2[:, -1], phi[..., :, -1], self.topology.get_neighbor_data(global_phi, i, 3), fg.wbeta[-1])
             
             # Construct penalty field (shape n_vars, N, N)
             # Start with zeros
@@ -300,19 +300,19 @@ class CubedSphereAdvectionSolver(BaseSolver):
 
             # West (Alpha=-1) -> Vn = -u1
             q_out = self.topology.get_neighbor_data(global_phi, i, 0)
-            penalty[..., 0, :] += sat(-fg.u1[0, :], phi[..., 0, :], q_out, fg.sqrt_g[0, :] * fg.walpha[0])
+            penalty[..., 0, :] += sat(-fg.u1[0, :], phi[..., 0, :], q_out, fg.walpha[0])
             
             # East (Alpha=1) -> Vn = u1
             q_out = self.topology.get_neighbor_data(global_phi, i, 1)
-            penalty[..., -1, :] += sat(fg.u1[-1, :], phi[..., -1, :], q_out, fg.sqrt_g[-1, :] * fg.walpha[-1])
+            penalty[..., -1, :] += sat(fg.u1[-1, :], phi[..., -1, :], q_out, fg.walpha[-1])
             
             # South (Beta=-1) -> Vn = -u2
             q_out = self.topology.get_neighbor_data(global_phi, i, 2)
-            penalty[..., :, 0] += sat(-fg.u2[:, 0], phi[..., :, 0], q_out, fg.sqrt_g[:, 0] * fg.wbeta[0])
+            penalty[..., :, 0] += sat(-fg.u2[:, 0], phi[..., :, 0], q_out, fg.wbeta[0])
             
             # North (Beta=1) -> Vn = u2
             q_out = self.topology.get_neighbor_data(global_phi, i, 3)
-            penalty[..., :, -1] += sat(fg.u2[:, -1], phi[..., :, -1], q_out, fg.sqrt_g[:, -1] * fg.wbeta[-1])
+            penalty[..., :, -1] += sat(fg.u2[:, -1], phi[..., :, -1], q_out, fg.wbeta[-1])
             
             rhs[..., i, :, :] = -skew_div + penalty
             
@@ -384,9 +384,15 @@ class CubedSphereAdvectionSolver(BaseSolver):
         t_start, t_end = t_span
         current_time = t_start
         
-        # Estimate dt (simple constant dt based on CFL)
-        dt_est = (self.cfg.CFL / self.cfg.u0) * (2 / self.cfg.N**2)
-        
+        # Estimate dt: Use config.dt if provided, else use heuristic
+        if self.cfg.dt is not None:
+            dt_est = self.cfg.dt
+        else:
+            # Heuristic for DG on Sphere: dt ~ CFL * dx_min / u_max
+            # Approximate dx ~ R / N (actually smaller near corners, scaling with 1/N^2 for stability)
+            # Factor of R was missing in original heuristic if u0 is physical velocity (m/s)
+            dt_est = (self.cfg.CFL * self.cfg.R / self.cfg.u0) * (1.0 / self.cfg.N**2)
+
         print(f"=== Starting Simulation (NumPy) ===")
         print(f"N={self.cfg.N}, CFL={self.cfg.CFL}, dt={dt_est:.5f}, T_span={t_span}")
         
@@ -398,6 +404,10 @@ class CubedSphereAdvectionSolver(BaseSolver):
         if callbacks:
             for cb in callbacks:
                 cb(current_time, state)
+        
+        # Determine print interval (try to print ~20 times per run or every 1000 steps)
+        total_steps_est = (t_end - t_start) / dt_est
+        print_interval = max(50, int(total_steps_est / 20))
         
         while current_time < t_end - epsilon:
             remaining = t_end - current_time
@@ -416,8 +426,8 @@ class CubedSphereAdvectionSolver(BaseSolver):
                 for cb in callbacks:
                     cb(current_time, state)
             
-            # Print occasionally (optional check to avoid spam)
-            if step_count % 50 == 0:
+            # Print occasionally
+            if step_count % print_interval == 0:
                  print(f"Step {step_count}: t={current_time:.4f}")
                 
         print("=== Simulation Complete ===")
@@ -433,8 +443,13 @@ class CubedSphereAdvectionSolver(BaseSolver):
         
         t_start, t_end = t_span
         duration = t_end - t_start
-        dt_est = (self.cfg.CFL / self.cfg.u0) * (2 / self.cfg.N**2)
         
+        # Estimate dt
+        if self.cfg.dt is not None:
+            dt_est = self.cfg.dt
+        else:
+             dt_est = (self.cfg.CFL * self.cfg.R / self.cfg.u0) * (1.0 / self.cfg.N**2)
+
         def scan_body(carry, _):
             s = carry
             s_new = self._jit_step(s, dt_est)

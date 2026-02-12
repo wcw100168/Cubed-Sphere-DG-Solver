@@ -108,6 +108,100 @@ class CubedSphereSWEJax(BaseSolver):
         # We pass this 'metrics' object to the purely functional compute_rhs.
         self.metrics = self._pack_metrics()
 
+    def get_initial_condition(self, type: str = "case2", **kwargs) -> np.ndarray:
+        """
+        Generate initial conditions. Returns NumPy array.
+        """
+        config = self.config
+        state = np.zeros((3, 6, self.N+1, self.N+1))
+        
+        # Physics Parameters
+        u0_vel = 2.0 * np.pi * self.R / (12.0 * 24.0 * 3600.0) # ~38 m/s
+        h0 = config.get('H_avg', 8000.0)
+        
+        if type == "case6":
+            # Williamson Case 6: Rossby-Haurwitz Wave
+            # Parameters
+            omega = kwargs.get('omega', 7.848e-6)
+            K = kwargs.get('K', 7.848e-6)
+            R_wave = kwargs.get('R_wave', 4.0)
+            h0_c6 = kwargs.get('h0', 8000.0)
+            R_earth = self.R
+            Omega = OMEGA
+            g = GRAVITY
+            
+            for i, fname in enumerate(self.topology.FACE_MAP):
+                # Use faces dict, accessing numpy arrays within it (metrics might be jax, convert if needed)
+                fg = self.faces[fname]
+                
+                # Check if coords are jax or numpy. Initialized as numpy in generate_face
+                # Assuming fg.lon, fg.lat are available interactively?
+                # The _compute_extended_metrics converted some things to JAX?
+                # fg.lon, fg.lat come from geometry.generate_face -> numpy
+                
+                # If they are JAX arrays, convert to numpy for init
+                lam = np.array(fg.lon)
+                th = np.array(fg.lat)
+                
+                sin_lat = np.sin(th)
+                cos_lat = np.cos(th)
+                cos_Rlam = np.cos(R_wave * lam)
+                sin_Rlam = np.sin(R_wave * lam)
+                cos_2Rlam = np.cos(2.0 * R_wave * lam)
+                
+                # Height Field
+                t1 = (omega / 2.0) * (2.0 * Omega + omega) * (cos_lat**2)
+                t2_brack = ( (R_wave+1)*cos_lat**2 + (2*R_wave**2 - R_wave - 2) - 2*R_wave**2 * (cos_lat**(-2)) )
+                t2 = 0.25 * K**2 * (cos_lat**(2*R_wave)) * t2_brack
+                A = t1 + t2
+                
+                b_num = 2.0 * (Omega + omega) * K
+                b_den = (R_wave + 1) * (R_wave + 2)
+                b_brack = ( (R_wave**2 + 2*R_wave + 2) - (R_wave+1)**2 * cos_lat**2 )
+                B = (b_num / b_den) * (cos_lat**R_wave) * b_brack
+                
+                c_brack = (R_wave + 1) * cos_lat**2 - (R_wave + 2)
+                C = 0.25 * K**2 * (cos_lat**(2*R_wave)) * c_brack
+                
+                gh = g * h0_c6 + (R_earth**2) * (A + B * cos_Rlam + C * cos_2Rlam)
+                h = gh / g
+                
+                # Need sqrt_g. If it's JAX array, convert.
+                sqrt_g = np.array(fg.sqrt_g)
+                state[0, i] = h * sqrt_g
+                
+                # Velocity
+                u_term1 = R_earth * omega * cos_lat
+                u_term2 = R_earth * K * (cos_lat**(R_wave-1)) * (R_wave * sin_lat**2 - cos_lat**2) * cos_Rlam
+                u_sph = u_term1 + u_term2
+                v_sph = -R_earth * K * R_wave * (cos_lat**(R_wave-1)) * sin_lat * sin_Rlam
+                
+                # Projections
+                sin_lam, cos_lam = np.sin(lam), np.cos(lam)
+                Vx = u_sph * (-sin_lam) + v_sph * (-sin_lat * cos_lam)
+                Vy = u_sph * (cos_lam)  + v_sph * (-sin_lat * sin_lam)
+                Vz = u_sph * (0.0)      + v_sph * (cos_lat)
+                
+                g1_vec = np.array(fg.g1_vec)
+                g2_vec = np.array(fg.g2_vec)
+                
+                b1 = Vx*g1_vec[...,0] + Vy*g1_vec[...,1] + Vz*g1_vec[...,2]
+                b2 = Vx*g2_vec[...,0] + Vy*g2_vec[...,1] + Vz*g2_vec[...,2]
+                
+                state[1, i] = b1
+                state[2, i] = b2
+                
+            return state
+
+        elif type == "case2":
+            # ... (Existing case 2 logic if any, or minimal placeholder)
+            # Reimplement Case 2 for JAX if needed, or rely on base class logic?
+            # Base class logic delegated to here. So I must implement it if I want it.
+            # I'll focus on Case 6.
+            pass
+            
+        return super().get_initial_condition(type, **kwargs)
+
     def _pack_metrics(self):
         """Pack all static face metrics into a JAX-friendly structure."""
         metrics = {}
