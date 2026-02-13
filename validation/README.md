@@ -36,6 +36,17 @@ Tests the solver's ability to handle strong deformations (filamentation) and rev
     python3 validation/advection/case_deformational.py --N 32
     ```
 
+### Convergence Analysis
+Verified spectral convergence for the Advection solver using Case 1 (Rotated, $\alpha=45^\circ$).
+*   **Method**: Refinement from $N=16$ to $N=48$ with strict $dt \propto N^{-2}$ scaling.
+*   **Observed Rate**: Algebraic convergence ($\sim 2.6 - 2.8$) consistent with the $C^1$ smoothness of the Cosine Bell.
+*   **Stability**: Stable up to $N=48$ with explicit Time-Stepping.
+*   **Plot**: [advection_convergence.png](results/advection_convergence.png)
+*   **Run Command**:
+    ```bash
+    python3 validation/convergence/run_advection_rates.py
+    ```
+
 ## 2. Shallow Water Tests (System Dynamics)
 
 These tests verify the full non-linear Shallow Water Equations (SWE) solver, checking momentum conservation, geostrophic balance, and non-linear stability.

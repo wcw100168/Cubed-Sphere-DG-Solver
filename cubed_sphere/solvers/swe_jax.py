@@ -250,8 +250,9 @@ class CubedSphereSWEJax(BaseSolver):
         g_inv[..., 0, 1] = -g12 * inv_det
         g_inv[..., 1, 0] = -g12 * inv_det
         
-        # sqrt_g = np.sqrt(det) # numerical
-        # Use Analytical Jacobian from Geometry instead of Numerical
+        # GCL FIX: Use numerical sqrt_g derived from basis vectors (np.sqrt(det))
+        # instead of analytical geometry.sqrt_g
+        num_sqrt_g = np.sqrt(det)
         
         lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
         f_coriolis = 2.0 * OMEGA * np.sin(theta)
@@ -260,7 +261,7 @@ class CubedSphereSWEJax(BaseSolver):
         fg.g1_vec = jnp.array(g1_vec)
         fg.g2_vec = jnp.array(g2_vec)
         fg.g_inv = jnp.array(g_inv)
-        fg.sqrt_g = jnp.array(fg.sqrt_g) # Use existing analytical sqrt_g
+        fg.sqrt_g = jnp.array(num_sqrt_g) # Use numerical sqrt_g
         fg.f_coriolis = jnp.array(f_coriolis)
         
         # Store lon/lat for utility (NumPy or JAX, doesn't matter for JIT as config)

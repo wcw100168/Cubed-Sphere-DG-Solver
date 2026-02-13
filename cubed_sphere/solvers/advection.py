@@ -33,13 +33,14 @@ class CubedSphereAdvectionSolver(BaseSolver):
         
         self.topology = CubedSphereTopology()
         self.geometry = CubedSphereEquiangular(config.R)
-        self.D_cpu = lgl_diff_matrix(config.N) # Keep CPU copy for init
+        self.num_nodes = config.N + 1
+        self.D_cpu = lgl_diff_matrix(self.num_nodes) # Keep CPU copy for init
         self.D = self.D_cpu # Initialize D for precomputation (NumPy)
         
         # Initialize Grid Faces
         self.faces: Dict[str, FaceGrid] = {}
         for fname in self.topology.FACE_MAP:
-            self.faces[fname] = self.geometry.generate_face(config.N, fname)
+            self.faces[fname] = self.geometry.generate_face(self.num_nodes, fname)
             
         # Precompute static wind field
         self._precompute_static_fields(config.alpha0, config.u0)
@@ -129,15 +130,20 @@ class CubedSphereAdvectionSolver(BaseSolver):
         center_lon = 0.0
         center_lat = 0.0
         
-        # State: (n_vars, 6, N, N)
+        # Determine grid size (Nodes = N+1 for LGL)
+        num_nodes = self.cfg.N + 1
+        
+        # State: (n_vars, 6, N+1, N+1)
         if self.cfg.n_vars > 1:
-            state = np.zeros((self.cfg.n_vars, 6, self.cfg.N, self.cfg.N))
+            state = np.zeros((self.cfg.n_vars, 6, num_nodes, num_nodes))
         else:
-            state = np.zeros((1, 6, self.cfg.N, self.cfg.N)) # Keep 4D internally even for n_vars=1 to simplify? 
+            state = np.zeros((1, 6, num_nodes, num_nodes)) # Keep 4D internally even for n_vars=1 to simplify? 
             # OR we can keep 3D separately.
             # Current request implies (n_vars, 6, ...).
             # But legacy code used (6, ...).
             # Let's standardize on (n_vars, 6, ...)
+        
+        # ... Geometry calculations done on CPU for simplicity ...
         
         # ... Geometry calculations done on CPU for simplicity ...
         for i, fname in enumerate(self.topology.FACE_MAP):

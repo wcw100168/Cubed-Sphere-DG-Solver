@@ -155,34 +155,40 @@ class CubedSphereSWENumpy(BaseSolver):
              
         elif type == "case2":
             # Williamson Case 2: Steady State Zonal Flow
-            alpha = kwargs.get('alpha', 0.0) # Angle of rotation
+            alpha_deg = kwargs.get('alpha', 0.0) # Angle of rotation (degrees)
+            alpha = np.deg2rad(alpha_deg)
+            sin_alpha = np.sin(alpha)
+            cos_alpha = np.cos(alpha)
             
             for i, fname in enumerate(self.topology.FACE_MAP):
                 fg = self.faces[fname]
                 
-                # 1. Height Field (Analytic)
-                # h = h0 - (R * Omega * u0 + 0.5 * u0^2) * sin^2(lat) / g
-                # This is "Geostrophic Balance" (roughly)
-                term = (R * Omega * u0_vel + 0.5 * u0_vel**2)
-                h = h0 - (term * np.sin(fg.lat)**2) / g
+                # Coordinates
+                lam = fg.lon
+                th = fg.lat
                 
-                # Mass = h * sqrt_g (Use solver's sqrt_g!)
+                # 1. Rotated Latitude sin(theta') (Eq 2.4 Williamson)
+                # sin(th') = sin(th)cos(a) - cos(lam)cos(th)sin(a)
+                sin_th_prime = np.sin(th) * cos_alpha - np.cos(lam) * np.cos(th) * sin_alpha
+                
+                # 2. Height Field (Eq 2.3 Williamson)
+                # h = h0 - (1/g)(R*Om*u0 + u0^2/2) * sin^2(th')
+                term = (R * Omega * u0_vel + 0.5 * u0_vel**2)
+                h = h0 - (term * sin_th_prime**2) / g
+                
+                # Initial Mass = h * sqrt_g
                 state[0, i] = h * fg.sqrt_g
                 
-                # 2. Velocity Field
-                # u_zonal = u0 * cos(lat)
-                # u_merid = 0
-                u_sph = u0_vel * np.cos(fg.lat)
-                v_sph = np.zeros_like(u_sph)
+                # 3. Velocity Field (Eq 2.1 & 2.2 Williamson)
+                # u_s = u0 * (cos(th)cos(a) + cos(lam)sin(th)sin(a))
+                # v_s = -u0 * sin(lam)sin(a)
+                u_sph = u0_vel * (np.cos(th) * cos_alpha + np.cos(lam) * np.sin(th) * sin_alpha)
+                v_sph = -u0_vel * np.sin(lam) * sin_alpha
                 
                 # Project onto Local Contravariant Basis
-                # Note: fg.g1_vec, g2_vec are (N, N, 3) tangents in Cartesian
-                # We need to project the spherical vector (u_sph, v_sph) onto these.
-                
-                # First, convert Spherical (u, v) -> Cartesian (Vx, Vy, Vz)
-                # V = u_sph * e_lambda + v_sph * e_theta
-                # e_lambda = (-sin(lon), cos(lon), 0)
-                # e_theta = (-sin(lat)cos(lon), -sin(lat)sin(lon), cos(lat))
+                # We need Covariant components (u_1, u_2) for the state.
+                # Project (u_sph, v_sph) -> Cartesian V -> Dot with covariant basis vectors g_1, g_2
+                # V = u_s * e_lam + v_s * e_th
                 
                 sin_lam, cos_lam = np.sin(fg.lon), np.cos(fg.lon)
                 sin_th, cos_th = np.sin(fg.lat), np.cos(fg.lat)
@@ -194,37 +200,11 @@ class CubedSphereSWENumpy(BaseSolver):
                 Vy = u_sph * e_lam_y + v_sph * e_th_y
                 Vz = u_sph * e_lam_z + v_sph * e_th_z
                 
-                # Solve: V = u1 * g1 + u2 * g2
-                # Dot with g1, g2:
-                # V . g1 = u1 * g11 + u2 * g12
-                # V . g2 = u1 * g12 + u2 * g22
+                # Covariant components u_i = V . g_i
+                # g_i vectors are stored in fg.g1_vec, fg.g2_vec
                 
                 b1 = Vx*fg.g1_vec[...,0] + Vy*fg.g1_vec[...,1] + Vz*fg.g1_vec[...,2]
                 b2 = Vx*fg.g2_vec[...,0] + Vy*fg.g2_vec[...,1] + Vz*fg.g2_vec[...,2]
-                
-                # Invert 2x2:
-                # [u1] = (1/det) [g22  -g12] [b1]
-                # [u2]           [-g12  g11] [b2]
-                
-                det = fg.g_ij[..., 0, 0] * fg.g_ij[..., 1, 1] - fg.g_ij[..., 0, 1]**2
-                g11 = fg.g_ij[..., 0, 0]
-                g22 = fg.g_ij[..., 1, 1]
-                g12 = fg.g_ij[..., 0, 1]
-                
-                u1 = (g22 * b1 - g12 * b2) / det
-                u2 = (-g12 * b1 + g11 * b2) / det
-                
-                # Store Covariant Velocity for state?
-                # The solver state expects Covariant Velocity u_1, u_2
-                # u_i = g_ij u^j
-                # u_1 = g11*u1 + g12*u2 = b1 (since b1 = V . g1 = u^j g_j . g_1 = u^j g_j1 = u_1)
-                # u_2 = b2
-                
-                # WAIT! Solver expects Covariant components as [1] and [2]?
-                # Check compute_rhs:
-                # u1_cov = global_state[1, i]
-                # u2_cov = global_state[2, i]
-                # YES.
                 
                 state[1, i] = b1
                 state[2, i] = b2
@@ -369,6 +349,9 @@ class CubedSphereSWENumpy(BaseSolver):
         # Inverse Metric g^ij (Contravariant)
         det = g11*g22 - g12**2
         inv_det = 1.0 / det
+        
+        # GCL FIX: Enforce discrete consistency by using numerical Jacobian
+        fg.sqrt_g = np.sqrt(det)
         
         # Store as (N, N, 2, 2)
         fg.g_ij = np.zeros(g11.shape + (2, 2))
