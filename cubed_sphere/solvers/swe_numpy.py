@@ -350,8 +350,7 @@ class CubedSphereSWENumpy(BaseSolver):
         det = g11*g22 - g12**2
         inv_det = 1.0 / det
         
-        # GCL FIX: Enforce discrete consistency by using numerical Jacobian
-        fg.sqrt_g = np.sqrt(det)
+        # fg.sqrt_g = np.sqrt(det) # Numerical Jacobian (optional, currently using Analytic)
         
         # Store as (N, N, 2, 2)
         fg.g_ij = np.zeros(g11.shape + (2, 2))

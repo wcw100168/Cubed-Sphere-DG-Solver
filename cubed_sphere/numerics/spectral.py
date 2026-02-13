@@ -5,26 +5,18 @@ from typing import Tuple
 def lg_nodes_weights(a: float, b: float, N: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute Legendre-Gauss (LG) nodes and weights on interval [a, b].
-
+    
     Parameters
     ----------
-    a : float
-        Start of the interval.
-    b : float
-        End of the interval.
+    a, b : float
+        Interval endpoints.
     N : int
         Number of quadrature nodes.
-
-    Returns
-    -------
-    nodes : np.ndarray
-        Array of N nodes.
-    weights : np.ndarray
-        Array of N weights.
     """
-    xi, wi = np.polynomial.legendre.leggauss(N)  # on [-1,1]
+    xi, wi = np.polynomial.legendre.leggauss(N)
     c = 0.5 * (b - a)
     m = 0.5 * (b + a)
+    # Linear map from [-1, 1] to [a, b]
     nodes = c * xi + m
     weights = c * wi
     return nodes, weights
@@ -32,99 +24,70 @@ def lg_nodes_weights(a: float, b: float, N: int) -> Tuple[np.ndarray, np.ndarray
 def lgl_nodes_weights(a: float, b: float, N: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Legendre-Gauss-Lobatto (LGL) nodes and weights on [a, b].
-    Using P_{N-1}(x) and its derivative for interior nodes.
-
-    Parameters
-    ----------
-    a : float
-        Start of the interval.
-    b : float
-        End of the interval.
-    N : int
-        Number of nodes (must be >= 2).
-
-    Returns
-    -------
-    nodes : np.ndarray
-        Array of N LGL nodes.
-    weights : np.ndarray
-        Array of N LGL weights.
-    
-    Raises
-    ------
-    ValueError
-        If N < 2.
+    Nodes includes endpoints.
     """
     if N < 2:
         raise ValueError("LGL requires N >= 2")
 
-    # Legendre polynomial of degree N-1
-    P = Legendre.basis(N - 1)   # P_{N-1}(x) on [-1,1]
+    # Use Legendre polynomial of degree N-1, denoted as P_{N-1}
+    P = Legendre.basis(N - 1)
     dP = P.deriv()
 
-    # Interior roots of dP (if N>2)
+    # Interior nodes are roots of P'_{N-1}
+    # Note: dP.roots() returns sorted roots by default in recent numpy versions,
+    # but explicit sort ensures safety.
     x_int = np.sort(dP.roots()) if N > 2 else np.array([], dtype=float)
 
-    # Concatenate endpoints +-1
+    # Concatenate endpoints -1 and 1
     x = np.concatenate(([-1.0], x_int, [1.0]))
 
-    # Weights on [-1,1]
-    PN1_vals = P(x)              # P_{N-1}(x_i)
+    # Compute weights on reference interval [-1, 1]
+    # Formula: w_j = 2 / (N * (N-1) * [P_{N-1}(x_j)]^2)
+    PN1_vals = P(x)
     w = 2.0 / (N * (N - 1) * (PN1_vals ** 2))
 
-    # Map to [a,b]
+    # Linear map to [a, b]
     c = 0.5 * (b - a)
     m = 0.5 * (b + a)
     nodes = c * x + m
     weights = c * w
     return nodes, weights
 
-
 def lgl_diff_matrix(N: int) -> np.ndarray:
     """
-    Construct the 1D LGL differentiation matrix D on given N (mapped to [-1, 1]).
-
-    Parameters
-    ----------
-    N : int
-        Number of LGL nodes.
-
-    Returns
-    -------
-    D : np.ndarray
-        The (N, N) differentiation matrix.
+    Construct the 1D LGL differentiation matrix D on [-1, 1].
+    
+    The metric terms (Jacobian of the mapping) should be applied separately
+    when solving on [a, b].
     """
-    Pn = Legendre.basis(N-1)
-    # We compute nodes on [-1, 1] for the standardized Diff Matrix
+    # 1. Get nodes on reference interval [-1, 1]
     x, _ = lgl_nodes_weights(-1.0, 1.0, N)
     
-    # Evaluate P_N(x) at standard nodes
-    # Note: The code in notebook used Pn = Legendre.basis(N-1), which is P_{N-1}. 
-    # Let's verify standard LGL Diff Matrix construction. 
-    # Usually involves P_{N-1}(x_i) or P_N(x_i). 
-    # The logic in notebook:
-    # denominator = (x[i] - x[j]) * Pn_x[j] -> which uses P_{N-1}(x_j).
-    # This aligns with common spectral element formulations using L_i(x) constructed from P_{N-1}.
-    
+    # 2. Evaluate P_{N-1}(x) at these nodes
+    Pn = Legendre.basis(N - 1)
     Pn_x = Pn(x)
     
-    # Initialize derivative matrix
-    D = np.zeros((N, N))
+    # 3. Compute Distance Matrix (x_i - x_j) using broadcasting
+    # xi_grid: columns are identical (x_0, x_0, ... x_0)
+    # xj_grid: rows are identical (x_0, x_1, ... x_N)
+    xi_grid = x[:, np.newaxis]
+    xj_grid = x[np.newaxis, :]
+    delta_x = xi_grid - xj_grid
     
-    # 1. Off-diagonal elements
-    for i in range(N):
-        for j in range(N):
-            if i != j:
-                # Formula: (P_{N-1}(xi) / P_{N-1}(xj)) * (1 / (xi - xj))
-                denominator = (x[i] - x[j]) * Pn_x[j]
-                if np.abs(denominator) < 1e-15:
-                    # Theoretically LGL nodes are unique, so this shouldn't happen unless precision issue
-                    D[i, j] = 0.0 
-                else:
-                    D[i, j] = Pn_x[i] / denominator
+    # Avoid division by zero on diagonal by setting diagonal delta_x to 1 (temporary)
+    np.fill_diagonal(delta_x, 1.0)
     
-    # 2. Diagonal elements using Negative Sum Trick
-    for i in range(N):
-        D[i, i] = -np.sum(D[i, :])
-        
+    # 4. Compute Off-diagonal entries
+    # Formula: D_ij = (P_{N-1}(x_i) / P_{N-1}(x_j)) * (1 / (x_i - x_j))
+    # We use outer product for Pn ratios: Pn_x[i] / Pn_x[j]
+    Pn_ratio = Pn_x[:, np.newaxis] / Pn_x[np.newaxis, :]
+    
+    D = Pn_ratio / delta_x
+    
+    # 5. Correct the Diagonal using Negative Sum Trick
+    # (Rows sum to zero for consistency)
+    np.fill_diagonal(D, 0.0) # Clear temp values
+    row_sum = np.sum(D, axis=1)
+    np.fill_diagonal(D, -row_sum)
+    
     return D
