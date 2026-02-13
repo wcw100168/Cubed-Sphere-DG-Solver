@@ -1,8 +1,31 @@
 import numpy as np
+import jax.numpy as jnp
+from typing import NamedTuple, Tuple, Dict, Optional, List
 import math
 import dataclasses
-from typing import Dict, Tuple, Optional, List
 from cubed_sphere.numerics.spectral import lgl_nodes_weights
+
+class FaceMetrics(NamedTuple):
+    """Immutable container for static geometric data of a single face."""
+    # Metric Terms
+    sqrt_g: jnp.ndarray      # Jacobian (N+1, N+1)
+    g_ij: jnp.ndarray        # Covariant Metric Tensor (N+1, N+1, 2, 2)
+    g_inv: jnp.ndarray       # Contravariant Metric Tensor (N+1, N+1, 2, 2)
+    
+    # 3D Basis Vectors (Critical for Flux Projection)
+    g1_vec: jnp.ndarray      # Tangent vector 1 in 3D cartesian (N+1, N+1, 3)
+    g2_vec: jnp.ndarray      # Tangent vector 2 in 3D cartesian (N+1, N+1, 3)
+    
+    # Coriolis
+    f_coriolis: jnp.ndarray  # Coriolis parameter (N+1, N+1)
+    
+    # Quadrature Weights
+    walpha: jnp.ndarray      # (N+1,)
+    wbeta: jnp.ndarray       # (N+1,)
+
+class GlobalGrid(NamedTuple):
+    """Container for the entire spherical grid."""
+    faces: Tuple[FaceMetrics, ...]  # Tuple containing metrics for 6 faces
 
 @dataclasses.dataclass
 class FaceGrid:
@@ -93,6 +116,36 @@ class CubedSphereTopology:
             slice_data = slice_data[..., ::-1]
             
         return slice_data
+
+def freeze_grid(faces: Dict[str, FaceGrid]) -> GlobalGrid:
+    """
+    Convert legacy dictionary of FaceGrids into an immutable GlobalGrid.
+    """
+    metrics_list = []
+    # Ensure correct order P1...P6
+    face_names = ["P1", "P2", "P3", "P4", "P5", "P6"]
+    
+    for fname in face_names:
+        fg = faces[fname]
+        
+        # Helper to safely convert numpy -> jax.numpy
+        def to_jax(arr):
+            # If it's already jax array?
+            return jnp.array(arr)
+            
+        metrics = FaceMetrics(
+            sqrt_g=to_jax(fg.sqrt_g),
+            g_ij=to_jax(fg.g_ij),
+            g_inv=to_jax(fg.g_inv),
+            g1_vec=to_jax(fg.g1_vec),
+            g2_vec=to_jax(fg.g2_vec),
+            f_coriolis=to_jax(fg.f_coriolis),
+            walpha=to_jax(fg.walpha),
+            wbeta=to_jax(fg.wbeta)
+        )
+        metrics_list.append(metrics)
+        
+    return GlobalGrid(faces=tuple(metrics_list))
 
 class CubedSphereEquiangular:
     """

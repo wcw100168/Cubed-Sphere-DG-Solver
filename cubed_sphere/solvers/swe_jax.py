@@ -6,7 +6,7 @@ import dataclasses
 from functools import partial
 from typing import Dict, Tuple, List, Any, Optional
 from cubed_sphere.solvers.base import BaseSolver
-from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid
+from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid, GlobalGrid, FaceMetrics, freeze_grid
 from cubed_sphere.numerics.spectral import lgl_diff_matrix, lgl_nodes_weights
 from numpy.polynomial.legendre import Legendre
 import math
@@ -94,19 +94,8 @@ class CubedSphereSWEJax(BaseSolver):
             self._compute_extended_metrics(fg, D_np) 
             self.faces[fname] = fg
             
-        # JIT Compilation of the main step function
-        # We bind the 'self' context carefully using closures or partials?
-        # Standard approach: The 'step' method calls a static method or functions that use captured arrays.
-        # But 'self.faces' is complex.
-        # To allow JAX to see 'self' data as constant, we rely on the class instance being relatively static 
-        # or passing the data explicitly.
-        # However, for a quick port, `partial(self.method)` works IF `self` is a PyTree.
-        # Since CubedSphereSWEJax is not registered as a PyTree, passing `self` to JIT is unsafe.
-        #
-        # Better Strategy:
-        # Pre-package all metric arrays into a "Metric PyTree" (Dict of Dicts).
-        # We pass this 'metrics' object to the purely functional compute_rhs.
-        self.metrics = self._pack_metrics()
+        # 4. Freeze Grid for JAX (NumPy -> GlobalGrid PyTree via freeze_grid)
+        self.grid_metrics = freeze_grid(self.faces)
 
     def get_initial_condition(self, type: str = "case2", **kwargs) -> np.ndarray:
         """
@@ -202,23 +191,6 @@ class CubedSphereSWEJax(BaseSolver):
             
         return super().get_initial_condition(type, **kwargs)
 
-    def _pack_metrics(self):
-        """Pack all static face metrics into a JAX-friendly structure."""
-        metrics = {}
-        for i, fname in enumerate(self.topology.FACE_MAP):
-            fg = self.faces[fname]
-            # Verify these are JAX arrays
-            metrics[i] = {
-                'sqrt_g': fg.sqrt_g,
-                'g_inv': fg.g_inv,
-                'g1_vec': fg.g1_vec, # Need these for boundary projection
-                'g2_vec': fg.g2_vec,
-                'f_coriolis': fg.f_coriolis,
-                'walpha': jnp.array(fg.walpha), # Ensure JAX
-                'wbeta': jnp.array(fg.wbeta)
-            }
-        return metrics
-
     def _compute_extended_metrics(self, fg: FaceGrid, D_np: np.ndarray):
         """
         Compute metrics using NumPy, then convert to JAX.
@@ -250,6 +222,13 @@ class CubedSphereSWEJax(BaseSolver):
         g_inv[..., 0, 1] = -g12 * inv_det
         g_inv[..., 1, 0] = -g12 * inv_det
         
+        # Calculate g_ij (Covariant)
+        g_ij = np.zeros(g11.shape + (2, 2))
+        g_ij[..., 0, 0] = g11
+        g_ij[..., 1, 1] = g22
+        g_ij[..., 0, 1] = g12
+        g_ij[..., 1, 0] = g12
+        
         # sqrt_g = np.sqrt(det) # numerical
         # Use Analytical Jacobian from Geometry instead of Numerical
         
@@ -260,6 +239,7 @@ class CubedSphereSWEJax(BaseSolver):
         fg.g1_vec = jnp.array(g1_vec)
         fg.g2_vec = jnp.array(g2_vec)
         fg.g_inv = jnp.array(g_inv)
+        fg.g_ij  = jnp.array(g_ij)
         fg.sqrt_g = jnp.array(fg.sqrt_g) # Use existing analytical sqrt_g
         fg.f_coriolis = jnp.array(f_coriolis)
         
@@ -267,14 +247,14 @@ class CubedSphereSWEJax(BaseSolver):
         fg.lon = lam
         fg.lat = theta
 
-    def _get_boundary_flux_data_jax(self, global_state, face_idx, side, metrics_all):
+    def _get_boundary_flux_data_jax(self, global_state, face_idx, side, grid: GlobalGrid):
         """JAX version of _get_boundary_flux_data."""
         # This needs to be traceable.
         # Accessing `self.topology.CONN_TABLE` is fine as it's static dict.
-        # Accessing `metrics_all` dict with integer keys is fine.
+        # Accessing `grid` NamedTuple via `grid.faces[...]` is fine.
         
         nbr_face, nbr_side, swap, reverse = self.topology.CONN_TABLE[(face_idx, side)]
-        nbr_metrics = metrics_all[nbr_face]
+        nbr_metrics: FaceMetrics = grid.faces[nbr_face]
         
         # global_state: (3, 6, N, N)
         nbr_U = global_state[:, nbr_face, :, :] # (3, N, N)
@@ -301,7 +281,7 @@ class CubedSphereSWEJax(BaseSolver):
             m_nb = m_nb[::-1]; u1_nb = u1_nb[::-1]; u2_nb = u2_nb[::-1]
             
         # Vectors
-        g1_full, g2_full = nbr_metrics['g1_vec'], nbr_metrics['g2_vec']
+        g1_full, g2_full = nbr_metrics.g1_vec, nbr_metrics.g2_vec
         
         if nbr_side == 0:   g1, g2 = g1_full[0, :], g2_full[0, :]
         elif nbr_side == 1: g1, g2 = g1_full[-1, :], g2_full[-1, :]
@@ -325,13 +305,13 @@ class CubedSphereSWEJax(BaseSolver):
         return m_nb, jnp.stack([Vx, Vy, Vz], axis=-1)
 
     @partial(jit, static_argnums=(0,))
-    def _compute_rhs_core(self, t, global_state, metrics, D):
+    def _compute_rhs_core(self, t, global_state, grid: GlobalGrid, D):
         """
         Pure JAX function for RHS computation.
         Args:
             t: scalar time
             global_state: (6, 3, N, N)
-            metrics: Dict of Dicts containing static metric arrays
+            grid: GlobalGrid containing static metric arrays
             D: Diff matrix (N, N)
         """
         rhs = jnp.zeros_like(global_state)
@@ -342,23 +322,23 @@ class CubedSphereSWEJax(BaseSolver):
         
         # We loop over faces 0..5. Since 6 is small, unrolling is efficient.
         for i in range(6):
-            fg_m = metrics[i]
+            fg_m: FaceMetrics = grid.faces[i]
             
             # Unpack Variables (Layout: 3, 6, N, N)
             m = global_state[0, i]
             u1_cov = global_state[1, i]
             u2_cov = global_state[2, i]
             
-            h = m / fg_m['sqrt_g']
-            g_inv = fg_m['g_inv']
+            h = m / fg_m.sqrt_g
+            g_inv = fg_m.g_inv
             
             # 1. Contravariant
             u1_con = g_inv[...,0,0]*u1_cov + g_inv[...,0,1]*u2_cov
             u2_con = g_inv[...,1,0]*u1_cov + g_inv[...,1,1]*u2_cov
             
             # 2. Vorticity & Energy
-            vort = (1.0 / fg_m['sqrt_g']) * (da(u2_cov) - db(u1_cov))
-            abs_vort = vort + fg_m['f_coriolis']
+            vort = (1.0 / fg_m.sqrt_g) * (da(u2_cov) - db(u1_cov))
+            abs_vort = vort + fg_m.f_coriolis
             
             KE = 0.5 * (u1_cov * u1_con + u2_cov * u2_con)
             Phi = GRAVITY * h
@@ -374,8 +354,8 @@ class CubedSphereSWEJax(BaseSolver):
             grad_E_2 = db(E)
             
             # Source Terms
-            S_1 = fg_m['sqrt_g'] * u2_con * abs_vort
-            S_2 = -fg_m['sqrt_g'] * u1_con * abs_vort
+            S_1 = fg_m.sqrt_g * u2_con * abs_vort
+            S_2 = -fg_m.sqrt_g * u1_con * abs_vort
             
             # Volume Updates (Use .at[].set)
             # rhs[0, i] = ... -> rhs = rhs.at[0, i].set(...)
@@ -389,35 +369,35 @@ class CubedSphereSWEJax(BaseSolver):
                 if side == 0:   # West
                     idx_2d = (0, slice(None)) 
                     nx, ny = -1, 0
-                    w_node = fg_m['walpha'][0]
+                    w_node = fg_m.walpha[0]
                     vn = -u1_con[idx_2d]
-                    g1_b = fg_m['g1_vec'][0, :]; g2_b = fg_m['g2_vec'][0, :]
+                    g1_b = fg_m.g1_vec[0, :]; g2_b = fg_m.g2_vec[0, :]
                     
                 elif side == 1: # East
                     idx_2d = (-1, slice(None))
                     nx, ny = 1, 0
-                    w_node = fg_m['walpha'][-1]
+                    w_node = fg_m.walpha[-1]
                     vn = u1_con[idx_2d]
-                    g1_b = fg_m['g1_vec'][-1, :]; g2_b = fg_m['g2_vec'][-1, :]
+                    g1_b = fg_m.g1_vec[-1, :]; g2_b = fg_m.g2_vec[-1, :]
                     
                 elif side == 2: # South
                     idx_2d = (slice(None), 0)
                     nx, ny = 0, -1
-                    w_node = fg_m['wbeta'][0]
+                    w_node = fg_m.wbeta[0]
                     vn = -u2_con[idx_2d]
-                    g1_b = fg_m['g1_vec'][:, 0]; g2_b = fg_m['g2_vec'][:, 0]
+                    g1_b = fg_m.g1_vec[:, 0]; g2_b = fg_m.g2_vec[:, 0]
                     
                 elif side == 3: # North
                     idx_2d = (slice(None), -1)
                     nx, ny = 0, 1
-                    w_node = fg_m['wbeta'][-1]
+                    w_node = fg_m.wbeta[-1]
                     vn = u2_con[idx_2d]
-                    g1_b = fg_m['g1_vec'][:, -1]; g2_b = fg_m['g2_vec'][:, -1]
+                    g1_b = fg_m.g1_vec[:, -1]; g2_b = fg_m.g2_vec[:, -1]
                 
                 sat_coeff = scale / w_node
                 
                 # 4.1 Boundary Data
-                m_out, V_out = self._get_boundary_flux_data_jax(global_state, i, side, metrics)
+                m_out, V_out = self._get_boundary_flux_data_jax(global_state, i, side, grid)
                 m_in = m[idx_2d]
                 
                 # Project V_out
@@ -436,13 +416,13 @@ class CubedSphereSWEJax(BaseSolver):
                 vn_out = u1_con_out * nx + u2_con_out * ny
                 
                 # 4.2 Wave Speed Correction
-                h_in = m_in / fg_m['sqrt_g'][idx_2d]
-                h_out = m_out / fg_m['sqrt_g'][idx_2d] 
+                h_in = m_in / fg_m.sqrt_g[idx_2d]
+                h_out = m_out / fg_m.sqrt_g[idx_2d] 
                 
                 if side < 2:
-                    g_ii = fg_m['g_inv'][idx_2d][..., 0, 0]
+                    g_ii = fg_m.g_inv[idx_2d][..., 0, 0]
                 else:
-                    g_ii = fg_m['g_inv'][idx_2d][..., 1, 1]
+                    g_ii = fg_m.g_inv[idx_2d][..., 1, 1]
                     
                 c_in = jnp.sqrt(GRAVITY * h_in * g_ii)
                 c_out = jnp.sqrt(GRAVITY * h_out * g_ii)
@@ -456,8 +436,8 @@ class CubedSphereSWEJax(BaseSolver):
                 # 4.4 SAT Momentum
                 u1_in = u1_cov[idx_2d]; u2_in = u2_cov[idx_2d]
                 
-                KE_in = 0.5 * (u1_in * (u1_in*g_inv[idx_2d][...,0,0] + u2_in*g_inv[idx_2d][...,0,1]) + 
-                               u2_in * (u1_in*g_inv[idx_2d][...,1,0] + u2_in*g_inv[idx_2d][...,1,1]))
+                KE_in = 0.5 * (u1_in * (u1_in*fg_m.g_inv[idx_2d][...,0,0] + u2_in*fg_m.g_inv[idx_2d][...,0,1]) + 
+                               u2_in * (u1_in*fg_m.g_inv[idx_2d][...,1,0] + u2_in*fg_m.g_inv[idx_2d][...,1,1]))
                 E_in_val = KE_in + GRAVITY * h_in
                 
                 KE_out = 0.5 * (u1_out_proj * u1_con_out + u2_out_proj * u2_con_out)
@@ -477,17 +457,17 @@ class CubedSphereSWEJax(BaseSolver):
     def compute_rhs(self, t: float, state: np.ndarray) -> np.ndarray:
         """Wrapper calling JAX JIT function."""
         # Convert inputs to JAX if needed (usually handled by JIT)
-        return self._compute_rhs_core(t, state, self.metrics, self.D)
+        return self._compute_rhs_core(t, state, self.grid_metrics, self.D)
 
     @partial(jit, static_argnums=(0,))
-    def _step_core(self, t, state, dt, metrics, D, rk_a, rk_b, filter_mat):
+    def _step_core(self, t, state, dt, grid, D, rk_a, rk_b, filter_mat):
         """Pure JAX RK5 Step"""
         local_state = state
         du = jnp.zeros_like(state)
         
         # RK5
         for k in range(5):
-            rhs = self._compute_rhs_core(t, local_state, metrics, D)
+            rhs = self._compute_rhs_core(t, local_state, grid, D)
             
             # du = a[k]*du + dt*rhs
             # Use jax.lax.cond for the 0.0 check or just arithmetic 
@@ -510,7 +490,7 @@ class CubedSphereSWEJax(BaseSolver):
         return local_state
 
     def step(self, t: float, state: np.ndarray, dt: float) -> np.ndarray:
-        return self._step_core(t, state, dt, self.metrics, self.D, 
+        return self._step_core(t, state, dt, self.grid_metrics, self.D, 
                              self.rk_a, self.rk_b, self.filter_matrix)
 
     def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:

@@ -9,7 +9,7 @@ Metric: Relative L2 and Linf Error of the Geopotential Height Field (h).
 Constraints:
 - dt scaling: dt ~ 1/N^2
 - Duration: 1 Day
-- Alpha: 45 degrees
+- Alpha: 0 degrees (Standard Zonal Flow)
 """
 
 import numpy as np
@@ -33,7 +33,10 @@ def run_case2(N, dt):
     Omega = 7.292e-5 # Rotation rate
     g = 9.80616      # Gravity
     
-    alpha_deg = 0.0 # Flow angle (degrees)
+    # --- MODIFICATION: Changed alpha from 45.0 to 0.0 ---
+    alpha_deg = 0.0  # Flow angle (degrees)
+    # ----------------------------------------------------
+    
     days = 1.0
     
     # Physics Parameters (Case 2)
@@ -55,7 +58,7 @@ def run_case2(N, dt):
     
     solver = CubedSphereSWE(config)
     
-    # --- Initialize State (Alpha=45) ---
+    # --- Initialize State ---
     state_init = np.zeros((3, 6, N+1, N+1))
     
     topo = solver._impl.topology
@@ -80,14 +83,10 @@ def run_case2(N, dt):
         h_phys = h0 - (factor * sin_th_prime**2) / g
         
         # 4. Velocities (Zonal Flow u_s)
-        # u_sphere = u0 * (cos_alpha * np.cos(th) + sin_alpha * np.cos(lam) * np.sin(th))
-        # v_sphere = -u0 * sin_alpha * np.sin(lam)
-        
         u_sph = u0 * (cos_alpha * np.cos(th) + sin_alpha * np.cos(lam) * np.sin(th))
         v_sph = -u0 * sin_alpha * np.sin(lam)
         
         # 5. Project to Covariant Basis (u_1, u_2) manually
-        # This avoids dependency on helper functions and ensures exact projection
         
         # Cartesian Basis at (lam, th)
         sin_lam, cos_lam = np.sin(fg.lon), np.cos(fg.lon)
@@ -102,7 +101,6 @@ def run_case2(N, dt):
         Vz = u_sph * e_lam_z + v_sph * e_th_z
         
         # Covariant Components u_i = V . g_i
-        # g_i are the tangent vectors stored in fg.g1_vec, fg.g2_vec
         u1_cov = Vx*fg.g1_vec[...,0] + Vy*fg.g1_vec[...,1] + Vz*fg.g1_vec[...,2]
         u2_cov = Vx*fg.g2_vec[...,0] + Vy*fg.g2_vec[...,1] + Vz*fg.g2_vec[...,2]
         
@@ -114,12 +112,6 @@ def run_case2(N, dt):
     # Run Simulation
     solver.state = state_init.copy()
     T_total = days * 24.0 * 3600.0
-    
-    state_final = solver.step(0.0, state_init, 0.0) # Dummy call to init logic if needed? No.
-    # Actually use explicit loop as 'solve' might not be fully exposed or uses dynamic steps?
-    # CubedSphereSWE has `step`. It does not have `solve` in base?
-    # BaseSolver usually has `solve`.
-    # Let's check BaseSolver. Assuming standard loop for safety and precision control.
     
     # Manual Integration Loop
     t = 0.0
@@ -135,7 +127,6 @@ def run_case2(N, dt):
         step_count += 1
         
     # --- Error Calculation ---
-    # Extract Height h = state[0] / sqrt_g
     
     l2_err_sq = 0.0
     l2_ref_sq = 0.0
@@ -158,7 +149,6 @@ def run_case2(N, dt):
             w_alpha = fg.walpha
             w_beta = fg.wbeta
         else:
-            # Fallback (Should be there in standard grid)
             raise RuntimeError("Grid weights missing")
             
         W = np.outer(w_alpha, w_beta)
@@ -176,7 +166,7 @@ def run_case2(N, dt):
     return rel_l2, rel_linf
 
 def main():
-    resolutions = np.arange(4, 54, 4) # N = 4, 8, 12, ..., 52
+    resolutions = np.arange(4, 44, 4) # N = 4, 8, 12, ..., 32
     K_dt = 15000.0 # Scaling constant
     
     print("| N | L2 Error | Linf Error | L2 C.R. (div 2) | Linf C.R. (div 2) |")
@@ -216,19 +206,30 @@ def main():
         print(f"| {N} | {l2:.4e} | {linf:.4e} | {r_l2_str} | {r_linf_str} |")
         sys.stdout.flush()
         
-    # Plot
+    # --- MODIFICATION: Updated Plotting Logic to match Advection script ---
     N_vals = [r[0] for r in results]
     L2_vals = [r[1] for r in results]
+    Linf_vals = [r[2] for r in results]
     
-    plt.figure()
+    plt.figure(figsize=(10,10))
     plt.loglog(N_vals, L2_vals, 'o-', label='Relative L2 Error')
+    plt.loglog(N_vals, Linf_vals, 's--', label='Relative Linf Error')
+    
+    # Reference Line O(N^-8)
+    if len(N_vals) > 0:
+        ref_x = np.array(N_vals)
+        # Anchor at first point
+        ref_y = L2_vals[0] * (ref_x[0]/ref_x)**8
+        plt.loglog(ref_x, ref_y, 'k:', alpha=0.5, label='Reference $O(N^{-8})$')
+    
     plt.xlabel('Resolution N')
     plt.ylabel('Relative Error (h)')
-    plt.title('SWE Convergence (Case 2, alpha=45)')
+    plt.title('SWE Convergence (Case 2, alpha=0)')
     plt.grid(True, which="both", ls="-", alpha=0.3)
     plt.legend()
     plt.savefig("validation/results/swe_convergence.png")
     print("\nPlot saved to validation/results/swe_convergence.png")
+    # ----------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()
