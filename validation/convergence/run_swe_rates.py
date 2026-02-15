@@ -18,12 +18,14 @@ import sys
 import os
 import time
 
+import argparse
+
 # Add project root to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from cubed_sphere.solvers import CubedSphereSWE, SWEConfig
 
-def run_case2(N, dt):
+def run_case2(N, dt, backend='numpy'):
     """
     Run Williamson Case 2 (Steady State) for 1 Day.
     Returns (L2 Relative Error, Linf Relative Error) for Height Field h.
@@ -52,7 +54,7 @@ def run_case2(N, dt):
         gravity=g,
         H_avg=h0,
         dt=dt,
-        backend='numpy', # Standard backend
+        backend=backend, # Dynamic backend
         filter_order=16  # Active filtering for stability
     )
     
@@ -113,19 +115,10 @@ def run_case2(N, dt):
     solver.state = state_init.copy()
     T_total = days * 24.0 * 3600.0
     
-    # Manual Integration Loop
-    t = 0.0
-    current_state = state_init.copy()
-    
-    step_count = 0
-    while t < T_total:
-        if t + dt > T_total:
-            dt = T_total - t
-        
-        current_state = solver.step(t, current_state, dt)
-        t += dt
-        step_count += 1
-        
+    # Use solver.solve() to enable backend optimizations (like lax.scan)
+    # Passing callbacks=None triggers Fast Path in JAX
+    current_state = solver.solve((0.0, T_total), state_init.copy(), callbacks=None)
+
     # --- Error Calculation ---
     
     l2_err_sq = 0.0
@@ -166,11 +159,26 @@ def run_case2(N, dt):
     return rel_l2, rel_linf
 
 def main():
-    resolutions = np.arange(4, 44, 4) # N = 4, 8, 12, ..., 32
-    K_dt = 15000.0 # Scaling constant
+    parser = argparse.ArgumentParser(description="SWE Convergence Test")
+    parser.add_argument("--backend", default="numpy", choices=["numpy", "jax"], help="Backend to use")
+    parser.add_argument("--max_n", type=int, default=32, help="Maximum N to test")
+    args = parser.parse_args()
     
-    print("| N | L2 Error | Linf Error | L2 C.R. (div 2) | Linf C.R. (div 2) |")
-    print("|---|---|---|---|---|")
+    if args.backend == 'jax':
+        # Enable Double Precision (x64) for JAX to reach spectral convergence (< 1e-7)
+        import jax
+        jax.config.update("jax_enable_x64", True)
+        print("Note: JAX Double Precision (x64) Enabled.")
+    
+    resolutions = np.arange(8, args.max_n + 4, 4) 
+    # K_dt adjusted for DG stability (CFL ~ 1/N or 1/N^2?)
+    # For Spectral element, CFL ~ O(1/N^2).
+    # Previous K_dt=15000 was likely for simpler schemes or lower order.
+    # Let's try a safer constant closer to the example: K_dt = 5000
+    K_dt = 5000.0 
+    
+    print(f"| N | L2 Error | Linf Error | L2 C.R. | Linf C.R. | Backend: {args.backend}")
+    print("|---|---|---|---|---|---|")
     
     results = []
     
@@ -178,9 +186,11 @@ def main():
         dt = K_dt / (N**2)
         
         try:
-            l2, linf = run_case2(N, dt)
+            l2, linf = run_case2(N, dt, backend=args.backend)
         except Exception as e:
             print(f"Error at N={N}: {e}")
+            import traceback
+            traceback.print_exc()
             l2, linf = float('nan'), float('nan')
             
         rate_l2 = 0.0

@@ -1,14 +1,16 @@
 import jax
 import jax.numpy as jnp
-from jax import jit
+from jax import jit, lax, Array
 import numpy as np
 import dataclasses
 from functools import partial
-from typing import Dict, Tuple, List, Any, Optional
+from typing import Dict, Tuple, List, Any, Optional, Union
 from cubed_sphere.solvers.base import BaseSolver
 from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid, GlobalGrid, FaceMetrics, freeze_grid
 from cubed_sphere.numerics.spectral import lgl_diff_matrix, lgl_nodes_weights
+from cubed_sphere.physics.initialization import get_initial_state
 from numpy.polynomial.legendre import Legendre
+from jax import lax
 import math
 
 # Physics Constants
@@ -42,8 +44,16 @@ def compute_bv_filter_matrix(N: int, strength=36.0, order=16) -> np.ndarray:
 class CubedSphereSWEJax(BaseSolver):
     """
     Shallow Water Equations solver on Cubed Sphere using JAX.
+    
     Implements the Vector Invariant Formulation with Rusanov Fluxes.
-    Matches CubedSphereSWENumpy.
+    Matches the numerical method of CubedSphereSWENumpy but optimized for
+    accelerator execution (GPU/TPU) via JIT compilation and `jax.lax.scan`.
+    
+    Architecture:
+    - Stateless `GlobalGrid` design (metric terms passed as arguments).
+    - Hybrid Initialization: Uses NumPy for complex geometry setup, then freezes to JAX.
+    - Dual-Path Execution: Supports both interactive Python loops (for debugging/callbacks)
+      and fused XLA kernels (for high-performance simulation).
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -97,99 +107,43 @@ class CubedSphereSWEJax(BaseSolver):
         # 4. Freeze Grid for JAX (NumPy -> GlobalGrid PyTree via freeze_grid)
         self.grid_metrics = freeze_grid(self.faces)
 
-    def get_initial_condition(self, type: str = "case2", **kwargs) -> np.ndarray:
-        """
-        Generate initial conditions. Returns NumPy array.
-        """
-        config = self.config
-        state = np.zeros((3, 6, self.N+1, self.N+1))
-        
-        # Physics Parameters
-        u0_vel = 2.0 * np.pi * self.R / (12.0 * 24.0 * 3600.0) # ~38 m/s
-        h0 = config.get('H_avg', 8000.0)
-        
-        if type == "case6":
-            # Williamson Case 6: Rossby-Haurwitz Wave
-            # Parameters
-            omega = kwargs.get('omega', 7.848e-6)
-            K = kwargs.get('K', 7.848e-6)
-            R_wave = kwargs.get('R_wave', 4.0)
-            h0_c6 = kwargs.get('h0', 8000.0)
-            R_earth = self.R
-            Omega = OMEGA
-            g = GRAVITY
+    def get_initial_condition(self):
+        # Convert JAX faces back to NumPy for initialization logic
+        faces_np = {}
+        for fname, fg in self.faces.items():
+            fg_np = dataclasses.replace(fg)
+            # Helper to safely convert if it's jax array
+            def to_np(arr):
+                return np.array(arr) if hasattr(arr, 'device_buffer') or str(type(arr)).find('jax') != -1 else arr
             
-            for i, fname in enumerate(self.topology.FACE_MAP):
-                # Use faces dict, accessing numpy arrays within it (metrics might be jax, convert if needed)
-                fg = self.faces[fname]
-                
-                # Check if coords are jax or numpy. Initialized as numpy in generate_face
-                # Assuming fg.lon, fg.lat are available interactively?
-                # The _compute_extended_metrics converted some things to JAX?
-                # fg.lon, fg.lat come from geometry.generate_face -> numpy
-                
-                # If they are JAX arrays, convert to numpy for init
-                lam = np.array(fg.lon)
-                th = np.array(fg.lat)
-                
-                sin_lat = np.sin(th)
-                cos_lat = np.cos(th)
-                cos_Rlam = np.cos(R_wave * lam)
-                sin_Rlam = np.sin(R_wave * lam)
-                cos_2Rlam = np.cos(2.0 * R_wave * lam)
-                
-                # Height Field
-                t1 = (omega / 2.0) * (2.0 * Omega + omega) * (cos_lat**2)
-                t2_brack = ( (R_wave+1)*cos_lat**2 + (2*R_wave**2 - R_wave - 2) - 2*R_wave**2 * (cos_lat**(-2)) )
-                t2 = 0.25 * K**2 * (cos_lat**(2*R_wave)) * t2_brack
-                A = t1 + t2
-                
-                b_num = 2.0 * (Omega + omega) * K
-                b_den = (R_wave + 1) * (R_wave + 2)
-                b_brack = ( (R_wave**2 + 2*R_wave + 2) - (R_wave+1)**2 * cos_lat**2 )
-                B = (b_num / b_den) * (cos_lat**R_wave) * b_brack
-                
-                c_brack = (R_wave + 1) * cos_lat**2 - (R_wave + 2)
-                C = 0.25 * K**2 * (cos_lat**(2*R_wave)) * c_brack
-                
-                gh = g * h0_c6 + (R_earth**2) * (A + B * cos_Rlam + C * cos_2Rlam)
-                h = gh / g
-                
-                # Need sqrt_g. If it's JAX array, convert.
-                sqrt_g = np.array(fg.sqrt_g)
-                state[0, i] = h * sqrt_g
-                
-                # Velocity
-                u_term1 = R_earth * omega * cos_lat
-                u_term2 = R_earth * K * (cos_lat**(R_wave-1)) * (R_wave * sin_lat**2 - cos_lat**2) * cos_Rlam
-                u_sph = u_term1 + u_term2
-                v_sph = -R_earth * K * R_wave * (cos_lat**(R_wave-1)) * sin_lat * sin_Rlam
-                
-                # Projections
-                sin_lam, cos_lam = np.sin(lam), np.cos(lam)
-                Vx = u_sph * (-sin_lam) + v_sph * (-sin_lat * cos_lam)
-                Vy = u_sph * (cos_lam)  + v_sph * (-sin_lat * sin_lam)
-                Vz = u_sph * (0.0)      + v_sph * (cos_lat)
-                
-                g1_vec = np.array(fg.g1_vec)
-                g2_vec = np.array(fg.g2_vec)
-                
-                b1 = Vx*g1_vec[...,0] + Vy*g1_vec[...,1] + Vz*g1_vec[...,2]
-                b2 = Vx*g2_vec[...,0] + Vy*g2_vec[...,1] + Vz*g2_vec[...,2]
-                
-                state[1, i] = b1
-                state[2, i] = b2
-                
-            return state
+            fg_np.g1_vec = to_np(fg.g1_vec)
+            fg_np.g2_vec = to_np(fg.g2_vec)
+            fg_np.g_inv = to_np(fg.g_inv)
+            fg_np.g_ij = to_np(fg.g_ij)
+            fg_np.sqrt_g = to_np(fg.sqrt_g)
+            fg_np.f_coriolis = to_np(fg.f_coriolis)
+            
+            # --- MANUALLY COPY LON/LAT FROM DYNAMIC ATTRIBUTES ---
+            if hasattr(fg, 'lon'):
+                 setattr(fg_np, 'lon', to_np(fg.lon)) # Use setattr for dynamic
+            if hasattr(fg, 'lat'):
+                 setattr(fg_np, 'lat', to_np(fg.lat))
+            
+            faces_np[fname] = fg_np
 
-        elif type == "case2":
-            # ... (Existing case 2 logic if any, or minimal placeholder)
-            # Reimplement Case 2 for JAX if needed, or rely on base class logic?
-            # Base class logic delegated to here. So I must implement it if I want it.
-            # I'll focus on Case 6.
-            pass
+        case_id = self.config.get('initial_condition', 6)
+        if isinstance(case_id, int):
+            case_id = f"case{case_id}"
             
-        return super().get_initial_condition(type, **kwargs)
+        # Call shared logic
+        state_np = get_initial_state(
+            config=self.config, 
+            faces=faces_np, 
+            case_type=case_id, 
+            **self.config
+        )
+        
+        return jax.device_put(state_np)
 
     def _compute_extended_metrics(self, fg: FaceGrid, D_np: np.ndarray):
         """
@@ -489,16 +443,40 @@ class CubedSphereSWEJax(BaseSolver):
         local_state = local_state.at[1:3, :, :, :].set(mom)
         return local_state
 
-    def step(self, t: float, state: np.ndarray, dt: float) -> np.ndarray:
+    def step(self, t: float, state: Array, dt: float) -> Array:
         return self._step_core(t, state, dt, self.grid_metrics, self.D, 
                              self.rk_a, self.rk_b, self.filter_matrix)
 
-    def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:
-        # Just delegate to NumPy solve logic loop, but using JAX step
-        # Or implement fully in JAX scan if callbacks allow?
-        # User requested mirroring swe_numpy logic. 
-        # But we can keep the upper loop in Python to call callbacks easily.
-        
+    @partial(jit, static_argnums=(0, 9))
+    def run_simulation_scan(self, state: Array, t_start: float, dt: float, grid, D, rk_a, rk_b, filter_mat, num_steps: int) -> Tuple[Array, float]:
+        def scan_body(carry, _):
+            s, t = carry
+            s_new = self._step_core(t, s, dt, grid, D, rk_a, rk_b, filter_mat)
+            return (s_new, t + dt), None
+
+        (final_state, final_time), _ = lax.scan(scan_body, (state, t_start), None, length=num_steps)
+        return final_state, final_time
+
+    def solve(self, t_span: Tuple[float, float], initial_state: Union[np.ndarray, Array], callbacks: List[Any] = None) -> np.ndarray:
+        """
+        Solve the Shallow Water Equations over the given time span.
+
+        Args:
+            t_span: (t_start, t_end) tuple.
+            initial_state: Initial state (NumPy or JAX array) of shape (3, 6, N+1, N+1).
+            callbacks: Optional list of callables `cb(t, state_np)`.
+
+        Returns:
+            Final state as a NumPy array.
+
+        Performance Notes:
+            - **Fast Path (Recommended)**: If `callbacks` is None, the solver uses `jax.lax.scan`.
+              This compiles the entire simulation into a single XLA kernel, providing massive
+              speedups on accelerators.
+            - **Slow Path (Debug)**: If `callbacks` are provided, the solver falls back to a 
+              Python loop. This is useful for debugging or frequent I/O but suffers from 
+              kernel launch overhead.
+        """
         t, t_end = t_span
         # Ensure initial state is JAX array
         state = jnp.array(initial_state)
@@ -508,31 +486,40 @@ class CubedSphereSWEJax(BaseSolver):
             dx_est = (self.R * 1.5) / self.N
             c_wave = math.sqrt(GRAVITY * self.config.get('H_avg', 10000.0))
             dt_algo = 0.5 * dx_est / c_wave 
-            print(f"Auto-estimated dt: {dt_algo:.4f}s")
+            print(f"[JAX] Auto-estimated dt: {dt_algo:.4f}s")
         else:
             dt_algo = float(dt_algo)
             
-        print(f"Solving SWE (JAX): N={self.N}, dt={dt_algo:.4f}s, T={t_end}")
-        
-        step_count = 0
-        epsilon = 1e-9
+        print(f"[JAX] Solving SWE: N={self.N}, dt={dt_algo:.4f}s, T_end={t_end}")
         
         # Initial Callback
         if callbacks:
-            # callbacks expect numpy array usually?
             s_np = np.array(state)
             for cb in callbacks: cb(t, s_np)
             
-        while t < t_end - epsilon:
-            remaining = t_end - t
-            step_dt = min(dt_algo, remaining)
+        # Optimization: Use lax.scan if no sequential callbacks required
+        if not callbacks:
+            remaining_time = t_end - t
+            num_steps = int(math.ceil(remaining_time / dt_algo))
             
-            state = self.step(t, state, step_dt)
-            t += step_dt
-            step_count += 1
+            print(f"[JAX] Fast Path Activated: Compiling {num_steps} steps via lax.scan...")
+            state, t = self.run_simulation_scan(state, t, dt_algo, self.grid_metrics, self.D, 
+                                              self.rk_a, self.rk_b, self.filter_matrix, num_steps)
             
-            if callbacks:
-                s_np = np.array(state) # Sync
-                for cb in callbacks: cb(t, s_np)
+        else:
+            print("[JAX] Slow Path: Callbacks detected, using Python loop.")
+            step_count = 0
+            epsilon = 1e-9
+            while t < t_end - epsilon:
+                remaining = t_end - t
+                step_dt = min(dt_algo, remaining)
+                
+                state = self.step(t, state, step_dt)
+                t += step_dt
+                step_count += 1
+                
+                if callbacks:
+                    s_np = np.array(state)
+                    for cb in callbacks: cb(t, s_np)
                 
         return np.array(state)
