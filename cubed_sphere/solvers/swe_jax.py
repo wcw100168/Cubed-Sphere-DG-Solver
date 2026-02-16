@@ -14,6 +14,14 @@ from jax import lax
 import math
 
 # Physics Constants
+def _get_dtype():
+    from jax import config
+    return jnp.float64 if config.read("jax_enable_x64") else jnp.float32
+
+# Defer creation to ensure we catch the config, or use property?
+# We'll use a lazy approach or just init them here.
+# NOTE: User should configure JAX before importing if possible, 
+# but we can also re-cast inside the class to be safe.
 EARTH_RADIUS = 6.37122e6
 OMEGA = 7.292e-5
 GRAVITY = 9.80616
@@ -59,7 +67,13 @@ class CubedSphereSWEJax(BaseSolver):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.N = config.get('N', 32)
-        self.R = config.get('R', EARTH_RADIUS)
+        
+        # Resolve dtype and cast constants
+        self.dtype = _get_dtype()
+        # Ensure constants are Arrays with correct dtype
+        self.R = jnp.array(config.get('R', EARTH_RADIUS), dtype=self.dtype)
+        self.omega = jnp.array(OMEGA, dtype=self.dtype)
+        self.gravity = jnp.array(GRAVITY, dtype=self.dtype)
         
         # 1. Topology & Geometry
         self.topology = CubedSphereTopology()
@@ -70,26 +84,27 @@ class CubedSphereSWEJax(BaseSolver):
         
         # Diff Matrix (NumPy init)
         D_np = lgl_diff_matrix(self.num_nodes)
-        self.D = jnp.array(D_np) # JAX Array
+        self.D = jnp.array(D_np, dtype=self.dtype) # JAX Array
         
-        self.geometry = CubedSphereEquiangular(self.R)
+        # Use simple float for geometry init, cast later
+        self.geometry = CubedSphereEquiangular(float(self.R))
         
         # 2. Operators - Filter
         # Compute in Numpy, convert to JAX
         filter_np = compute_bv_filter_matrix(self.N, strength=36.0, order=16)
-        self.filter_matrix = jnp.array(filter_np)
+        self.filter_matrix = jnp.array(filter_np, dtype=self.dtype)
         
         # RK5 Coefficients
         self.rk_a = jnp.array([0.0, 
                               -567301805773.0/1357537059087.0, 
                               -2404267990393.0/2016746695238.0, 
                               -3550918686646.0/2091501179385.0, 
-                              -1275806237668.0/842570457699.0])
+                              -1275806237668.0/842570457699.0], dtype=self.dtype)
         self.rk_b = jnp.array([1432997174477.0/9575080441755.0, 
                               5161836677717.0/13612068292357.0, 
                               1720146321549.0/2090206949498.0, 
                               3134564353537.0/4481467310338.0, 
-                              2277821191437.0/14882151754819.0])
+                              2277821191437.0/14882151754819.0], dtype=self.dtype)
         
         # 3. Initialize Faces and Extended Metrics
         # We need to compute metrics, then store them in a way accessible to JAX.
@@ -183,13 +198,13 @@ class CubedSphereSWEJax(BaseSolver):
         g_ij[..., 0, 1] = g12
         g_ij[..., 1, 0] = g12
         
-        # sqrt_g = np.sqrt(det) # numerical
-        # Use Analytical Jacobian from Geometry instead of Numerical
-        
-        lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
-        f_coriolis = 2.0 * OMEGA * np.sin(theta)
-        
-        # Convert to JAX and store in fg
+        # Explicit casts to self.dtype
+        fg.g1_vec = jnp.array(g1_vec, dtype=self.dtype)
+        fg.g2_vec = jnp.array(g2_vec, dtype=self.dtype)
+        fg.g_inv = jnp.array(g_inv, dtype=self.dtype)
+        fg.g_ij  = jnp.array(g_ij, dtype=self.dtype)
+        fg.sqrt_g = jnp.array(fg.sqrt_g, dtype=self.dtype) # Use existing analytical sqrt_g
+        fg.f_coriolis = jnp.array(f_coriolis, dtype=self.dtype)# Convert to JAX and store in fg
         fg.g1_vec = jnp.array(g1_vec)
         fg.g2_vec = jnp.array(g2_vec)
         fg.g_inv = jnp.array(g_inv)
@@ -260,16 +275,10 @@ class CubedSphereSWEJax(BaseSolver):
 
     @partial(jit, static_argnums=(0,))
     def _compute_rhs_core(self, t, global_state, grid: GlobalGrid, D):
-        """
-        Pure JAX function for RHS computation.
-        Args:
-            t: scalar time
-            global_state: (6, 3, N, N)
-            grid: GlobalGrid containing static metric arrays
-            D: Diff matrix (N, N)
-        """
+        dtype = global_state.dtype
         rhs = jnp.zeros_like(global_state)
-        scale = 4.0 / np.pi
+        # Force cast scalar
+        scale = jnp.array(4.0 / np.pi, dtype=dtype)
         
         def da(F): return D @ F * scale
         def db(F): return F @ D.T * scale
@@ -289,6 +298,13 @@ class CubedSphereSWEJax(BaseSolver):
             # 1. Contravariant
             u1_con = g_inv[...,0,0]*u1_cov + g_inv[...,0,1]*u2_cov
             u2_con = g_inv[...,1,0]*u1_cov + g_inv[...,1,1]*u2_cov
+            
+            # 2. Vorticity & Energy
+            vort = (1.0 / fg_m.sqrt_g) * (da(u2_cov) - db(u1_cov))
+            abs_vort = vort + fg_m.f_coriolis
+            
+            KE = 0.5 * (u1_cov * u1_con + u2_cov * u2_con)
+            Phi = self.gravity * h # Use class-level gravity.,1,0]*u1_cov + g_inv[...,1,1]*u2_cov
             
             # 2. Vorticity & Energy
             vort = (1.0 / fg_m.sqrt_g) * (da(u2_cov) - db(u1_cov))
