@@ -198,20 +198,18 @@ class CubedSphereSWEJax(BaseSolver):
         g_ij[..., 0, 1] = g12
         g_ij[..., 1, 0] = g12
         
+        # Calculate Coriolis
+        lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
+        f_coriolis = 2.0 * OMEGA * np.sin(theta)
+        
         # Explicit casts to self.dtype
         fg.g1_vec = jnp.array(g1_vec, dtype=self.dtype)
         fg.g2_vec = jnp.array(g2_vec, dtype=self.dtype)
         fg.g_inv = jnp.array(g_inv, dtype=self.dtype)
         fg.g_ij  = jnp.array(g_ij, dtype=self.dtype)
         fg.sqrt_g = jnp.array(fg.sqrt_g, dtype=self.dtype) # Use existing analytical sqrt_g
-        fg.f_coriolis = jnp.array(f_coriolis, dtype=self.dtype)# Convert to JAX and store in fg
-        fg.g1_vec = jnp.array(g1_vec)
-        fg.g2_vec = jnp.array(g2_vec)
-        fg.g_inv = jnp.array(g_inv)
-        fg.g_ij  = jnp.array(g_ij)
-        fg.sqrt_g = jnp.array(fg.sqrt_g) # Use existing analytical sqrt_g
-        fg.f_coriolis = jnp.array(f_coriolis)
-        
+        fg.f_coriolis = jnp.array(f_coriolis, dtype=self.dtype)
+
         # Store lon/lat for utility (NumPy or JAX, doesn't matter for JIT as config)
         fg.lon = lam
         fg.lat = theta
