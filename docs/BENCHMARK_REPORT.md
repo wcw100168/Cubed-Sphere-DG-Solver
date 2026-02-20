@@ -2,7 +2,7 @@
 
 This document details the performance benchmarks, architectural optimizations, and hardware-specific tuning for the Discontinuous Galerkin (DG) Shallow Water Equations (SWE) solver. All benchmarks are reproducible via the interactive environment.
 
-Interactive Colab Notebook: [Open `examples/Cubed_Sphere_Benchmarks.ipynb` in Colab](https://colab.research.google.com/)
+Interactive Colab Notebook: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wcw100168/Cubed-Sphere-DG-Solver/blob/main/examples/Cubed_Sphere_Benchmarks.ipynb)
 
 ---
 

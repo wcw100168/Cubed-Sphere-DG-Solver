@@ -89,7 +89,7 @@ Cubed-Sphere-DG-Solver/
 Clone the repository and install it in editable mode:
 
 ```bash
-git clone [https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git](https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git)
+git clone https://github.com/wcw100168/Cubed-Sphere-DG-Solver.git
 cd Cubed-Sphere-DG-Solver
 pip install -e .
 ```
@@ -168,3 +168,7 @@ config_gpu = SWEConfig(..., backend='jax')
 ```
 
 The underlying state tensors (`numpy.ndarray` vs `jax.Array`) are handled automatically by the solver facade.
+
+## Performance & Benchmarks
+
+Curious about the JAX GPU acceleration and scaling performance? Check out our detailed **[Benchmark Report](docs/BENCHMARK_REPORT.md)** for insights into XLA compilation optimization, `lax.scan` speedups, and hardware-specific precision tuning (FP32 vs FP64).
