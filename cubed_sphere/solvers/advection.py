@@ -68,6 +68,52 @@ class CubedSphereAdvectionSolver(BaseSolver):
              # Because our RK loop is fixed size (5), we can functionalize one full dt step
              self._jit_step = jax.jit(self._step_jax)
 
+    def _precompute_static_fields(self, alpha0: float, u0: float):
+        """
+        Precompute static geometric fields (metrics) and wind velocity.
+        """
+        # Scale for spectral differentiation (from [-1, 1] to [-pi/4, pi/4])
+        scale = 4.0 / np.pi
+
+        for fname, fg in self.faces.items():
+            # --- 1. Compute Metric Tensor Components (Covariant g_ij) ---
+            # Used for calculating physical velocity magnitude |u|^2 = g_ij u^i u^j
+            
+            # Basis vectors (Tangent vectors): g_1 = dX/dAlpha, g_2 = dX/dBeta
+            # D matrix represents d/dZeta. d/dAlpha = (dZeta/dAlpha) * d/dZeta = (4/pi) * D
+            
+            # Derivatives wrt Alpha (use pre-computed D_cpu for initialization)
+            g1_x = self.D_cpu @ fg.X * scale
+            g1_y = self.D_cpu @ fg.Y * scale
+            g1_z = self.D_cpu @ fg.Z * scale
+            
+            # Derivatives wrt Beta
+            g2_x = fg.X @ self.D_cpu.T * scale
+            g2_y = fg.Y @ self.D_cpu.T * scale
+            g2_z = fg.Z @ self.D_cpu.T * scale
+            
+            # Metric Components (Dot products of basis vectors)
+            fg.g_11 = g1_x*g1_x + g1_y*g1_y + g1_z*g1_z
+            fg.g_22 = g2_x*g2_x + g2_y*g2_y + g2_z*g2_z
+            fg.g_12 = g1_x*g2_x + g1_y*g2_y + g1_z*g2_z
+
+            # --- 2. Physical wind (Spherical) ---
+            u_sph, v_sph = self.geometry.solid_body_wind(fg.X, fg.Y, fg.Z, alpha0, u0)
+            
+            # --- 3. Contravariant wind ---
+            u1, u2 = self.geometry.compute_contravariant_vel(fg, u_sph, v_sph)
+            
+            if fg.sqrt_g is None:
+                raise ValueError(f"Face {fname} has undefined Jacobian sqrt_g")
+
+            fg.u1 = u1
+            fg.u2 = u2
+            
+            # --- 4. Divergence (Correction Term) ---
+            term1 = self.D_cpu @ (fg.sqrt_g * u1)
+            term2 = (fg.sqrt_g * u2) @ self.D_cpu.T
+            fg.div_u = (1.0 / fg.sqrt_g) * (term1 + term2)
+
     def _to_jax(self):
         """Convert all static arrays to JAX DeviceArrays."""
         from cubed_sphere import backend
@@ -82,36 +128,17 @@ class CubedSphereAdvectionSolver(BaseSolver):
             fg.beta = to_backend(fg.beta, self.xp)
             fg.walpha = to_backend(fg.walpha, self.xp)
             fg.wbeta = to_backend(fg.wbeta, self.xp)
-            # Coordinates might remain on CPU for plotting if needed, 
-            # but usually plotting is done after transferring back.
-            # Convert metric terms used in RHS
+            
+            # Convert Metric Arrays
             fg.sqrt_g = to_backend(fg.sqrt_g, self.xp)
+            fg.g_11 = to_backend(fg.g_11, self.xp)
+            fg.g_12 = to_backend(fg.g_12, self.xp)
+            fg.g_22 = to_backend(fg.g_22, self.xp)
+            
+            # Convert Velocity Fields
             fg.u1 = to_backend(fg.u1, self.xp)
             fg.u2 = to_backend(fg.u2, self.xp)
             fg.div_u = to_backend(fg.div_u, self.xp)
-
-    def _precompute_static_fields(self, alpha0: float, u0: float):
-        """
-        Precompute contravariant velocities and divergence for the formulation.
-        """
-        for fname, fg in self.faces.items():
-            # 1. Physical wind (Spherical)
-            u_sph, v_sph = self.geometry.solid_body_wind(fg.X, fg.Y, fg.Z, alpha0, u0)
-            
-            # 2. Contravariant wind
-            u1, u2 = self.geometry.compute_contravariant_vel(fg, u_sph, v_sph)
-            
-            if fg.sqrt_g is None:
-                raise ValueError(f"Face {fname} has undefined Jacobian sqrt_g")
-
-            fg.u1 = u1
-            fg.u2 = u2
-            
-            # 3. Divergence of Velocity (Correction Term for DG skew-symmetric)
-            # div(u) = (1/sqrt_g) * [ d/da(sqrt_g * u1) + d/db(sqrt_g * u2) ]
-            term1 = self.D @ (fg.sqrt_g * u1)
-            term2 = (fg.sqrt_g * u2) @ self.D.T
-            fg.div_u = (1.0 / fg.sqrt_g) * (term1 + term2)
 
     def get_initial_condition(self, type: str = "gaussian", 
                               func: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
@@ -341,44 +368,30 @@ class CubedSphereAdvectionSolver(BaseSolver):
             
         return local_state
 
-    def _get_max_wave_speed(self, state) -> float:
+    def _get_max_wave_speed(self, state=None) -> float:
         """
-        Implementation of wave speed calculation for advection.
-        Returns max(|u|) in the domain.
-        """
-        # For simple solid body or deformational flow, we can use u0 as a safe upper bound
-        # if the flow doesn't exceed u0 significantly.
-        # But for correctness, let's scan.
-        v_max = 0.0
-        xp = self.xp
+        Calculates the maximum local wave speed (sqrt(g_ij u^i u^j)) on the grid.
+        Uses precomputed metric tensors for full vectorization and JAX compatibility.
         
-        # If we have precomputed max velocity in config or during init, use it.
-        # But since velocity might be time-dependent (deformational), we should recompute.
-        # However, for this refactor, we'll implement a basic check.
+        Args:
+            state: Unused, but kept for API compatibility with BaseSolver.
+        """
+        local_max_speeds = []
         
         for fg in self.faces.values():
-            # u_mag = sqrt(u_sph^2 + v_sph^2)
-            # Reconstruct from contravariant is expensive.
-            # Use u0 if available or scan stored u1/u2 using metric.
+            # Calculate physical velocity squared magnitude using precomputed metrics
+            # |v|^2 = g_11*(u1)^2 + 2*g_12*u1*u2 + g_22*(u2)^2
+            v_sq = (fg.g_11 * fg.u1**2 + 
+                    2.0 * fg.g_12 * fg.u1 * fg.u2 + 
+                    fg.g_22 * fg.u2**2)
             
-            # Simple approximation: max(|u1|*sqrt(g11), |u2|*sqrt(g22))
-            # Accurate: sqrt(g_ij u^i u^j)
-            
-            if self.use_jax:
-                 # Skip detailed check on GPU to avoid sync, use u0 heuristic or cached max
-                 pass 
-            else:
-                 # Iterate nodes? No, vector ops.
-                 pass
-        
-        # Fallback to u0 from config if available, which effectively is v_max for Case 1.
-        # For Case Deformational, u0 is dummy.
-        # We should probably calculate it properly.
-        
-        # Since implementing full max scan is complex with JAX/Numpy split,
-        # we will use the heuristic that v_max ~ u0.
-        # For deformational flow, max velocity is comparable to u0 scale.
-        return self.cfg.u0
+            # Use self.xp (numpy or jax.numpy) for array operations
+            # Clamp negative values (numerical noise) before sqrt
+            v_mag = self.xp.sqrt(self.xp.maximum(v_sq, 0.0))
+            local_max_speeds.append(self.xp.max(v_mag))
+
+        # Return global maximum
+        return self.xp.max(self.xp.array(local_max_speeds))
 
     def step(self, t: float, state: np.ndarray, dt: float = None) -> np.ndarray:
         """

@@ -26,8 +26,10 @@ class CubedSphereSWE(BaseSolver):
     """
     
     def __init__(self, config: SWEConfig):
+        # BaseSolver expects a dictionary for config to use .get()
         super().__init__(dataclasses.asdict(config))
-        self.config = config
+        # We also store the strongly-typed config for internal usage
+        self.swe_config = config
         
         # Dispatch Backend
         if config.backend == 'numpy':
@@ -38,12 +40,26 @@ class CubedSphereSWE(BaseSolver):
              self._impl = SWEJaxSolver(dataclasses.asdict(config))
         else:
             raise ValueError(f"Unknown backend: {config.backend}")
+
+    def _to_jax(self):
+        """Delegates JAX conversion to implementation."""
+        if hasattr(self._impl, '_to_jax'):
+            self._impl._to_jax()
             
     def compute_rhs(self, t: float, state: np.ndarray) -> np.ndarray:
         """
         Compute the Right-Hand Side (du/dt).
         """
         return self._impl.compute_rhs(t, state)
+
+    def _get_max_wave_speed(self, state: np.ndarray) -> float:
+        """
+        Delegates max wave speed calculation to the backend implementation.
+        """
+        if hasattr(self._impl, '_get_max_wave_speed'):
+            return self._impl._get_max_wave_speed(state)
+        else:
+            raise NotImplementedError("Backend implementation missing '_get_max_wave_speed' method")
 
     def step(self, t: float, state: np.ndarray, dt: float) -> np.ndarray:
         """
@@ -78,7 +94,7 @@ class CubedSphereSWE(BaseSolver):
         Sets up Williamson Case 2 (Global Steady State Zonal Flow).
         Returns the initial state array (3, 6, N+1, N+1).
         """
-        config = self.config
+        config = self.swe_config
         num_nodes = config.N + 1
         state = np.zeros((3, 6, num_nodes, num_nodes))
         
