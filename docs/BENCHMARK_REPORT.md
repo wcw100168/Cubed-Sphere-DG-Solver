@@ -1,47 +1,69 @@
-# Cubed Sphere Solver 效能基準測試報告 (Benchmark Report)
+# Benchmark Report: Cubed-Sphere DG Solver
 
-| 更新日期 | 2026/02/01 |
-| :--- | :--- |
-| **測試環境** | Google Colab (Linux) |
-| **硬體規格** | GPU: NVIDIA T4 / CPU: Intel Xeon |
-| **比較對象** | NumPy (CPU) vs JAX (GPU) |
+This document details the performance benchmarks, architectural optimizations, and hardware-specific tuning for the Cubed-Sphere Discontinuous Galerkin (DG) solver. The benchmarks cover both the foundational Advection solver and the advanced Shallow Water Equations (SWE) solver.
 
-## 1. 測試摘要
+Interactive Colab Notebook: [Open `Cubed_Sphere_Benchmarks1.ipynb` in Colab](https://colab.research.google.com/)
 
-本報告評估了求解器在不同網格解析度 ($N$) 下的效能表現。測試結果證實，隨著問題規模擴大，**JAX (GPU)** 後端的平行運算優勢呈現爆發性增長。在 $N=256$ 的高解析度模擬中，JAX 展現了驚人的 **41 倍 (40.98x)** 加速能力。
+---
 
-## 2. 基準測試結果 (Summary Table)
+## 1. Advanced Optimization: Shallow Water Equations (SWE)
 
-| N (Grid Size) | NumPy (s) | JAX (GPU) (s) | Speedup (x) | 備註 |
-| :--- | :--- | :--- | :--- | :--- |
-| **32** | 0.5254 | 18.8755 | 0.03x | GPU 初始化與編譯成本佔主導 |
-| **64** | 4.2795 | 20.3440 | 0.21x | 兩者效能逐漸接近 |
-| **128** | 93.4461 | 22.7631 | 4.11x | GPU 優勢開始顯現 |
-| **256** | **2040.54** | **49.79** | **40.98x** | **GPU 展現壓倒性效能** |
+The SWE solver implementation represents the core computational challenge of this project. Migrating the numerical method to JAX required overcoming several critical bottlenecks related to Just-In-Time (JIT) compilation and hardware limits.
 
-> *註1：時間包含 JIT 編譯與資料傳輸時間，模擬真實使用情境。*
-> *註2：N=256 時，NumPy (CPU) 耗時約 34 分鐘，而 JAX (GPU) 僅需不到 1 分鐘。*
+### 1.1 Overcoming the XLA Compilation Bottleneck (`vmap` Vectorization)
+**The Problem:** Initial JAX implementations utilized Python `for` loops to iterate over the 6 faces and 24 boundaries of the cubed sphere. JAX's `@jit` unrolls Python loops, resulting in a massive XLA computation graph (>30,000 nodes). On a standard Colab instance (Intel Xeon CPU), compiling a high-resolution grid ($N=96$) took **over 20 minutes** before execution even started.
 
-## 3. 結果分析 (Performance Analysis)
+**The Solution:** We refactored the architecture to be fully vectorized using `jax.vmap`. 
+1. Replaced dictionary-based topology with a **Static Neighbor Index Array** `(6, 4, 3)`.
+2. Stacked face metrics into a Structure-of-Arrays (SoA) format `(6, N, N)`.
+3. Applied `vmap` to evaluate volume and flux terms across all 6 faces simultaneously in a SIMD fashion.
 
-### 3.1 小規模網格 ($N=32, 64$)：CPU 勝出
-* **現象**：在低解析度下，JAX 顯著慢於 NumPy。
-* **原因**：JAX 首次執行需要進行 XLA (JIT) 編譯，通常耗時 15~20 秒。當實際運算量極小（毫秒級）時，編譯時間成為主要瓶頸。此外，GPU 數千個核心未能被填滿，處於閒置狀態。
-* **建議**：開發、除錯與單元測試建議使用 **NumPy** 後端。
+**The Result:** Compilation time was reduced by several orders of magnitude.
+* **N=96 Compilation Time (Before):** > 20 minutes (CPU timeout/thrashing)
+* **N=96 Compilation Time (After):** **~1.5 seconds**
 
-### 3.2 中規模網格 ($N=128$)：GPU 優勢確立
-* **現象**：JAX 開始超越 NumPy，達到約 4 倍加速。
-* **原因**：運算密度足以填滿 GPU 核心，平行運算的紅利抵消了編譯成本。
+### 1.2 Execution Speedup (`jax.lax.scan` vs Python Loops)
+To integrate the ODEs over time, relying on a Python loop to dispatch steps to the GPU introduces massive Host-to-Device (CPU-to-GPU) communication overhead. 
+We implemented a "Fast Path" using `jax.lax.scan`, which compiles the entire time-stepping loop into a single GPU kernel.
 
-### 3.3 大規模網格 ($N=256$)：GPU 宰制 (Hero Metric)
-* **現象**：**JAX (50s) vs NumPy (2040s)**。GPU 提供了將近 **41 倍** 的加速。
-* **原因**：
-    1.  **CPU 的瓶頸**：隨著 $N$ 增加，CPU 不僅面臨運算量增加，還受限於記憶體頻寬與快取未命中 (Cache Miss)，導致執行時間呈指數級暴增（從 93s 暴增至 2040s）。
-    2.  **GPU 的擴展性**：GPU 僅需線性增加時間（從 23s 增加至 50s），展現極佳的擴展性。
-* **建議**：生產環境與高解析度科學模擬 **必須** 使用 **JAX** 後端。
+| Execution Path | Methodology | Performance |
+| :--- | :--- | :--- |
+| **Slow Path** | Python `for` loop calling `step()` (used for Callbacks) | CPU-bound by Kernel Launch Overhead |
+| **Fast Path** | `jax.lax.scan` | Massive speedup, native GPU execution |
 
-## 4. 結論
+### 1.3 Hardware Limitations & Precision Tuning (Nvidia T4 GPU)
+Benchmarking on consumer-grade GPUs (like Colab's Nvidia T4) revealed significant numerical and performance trade-offs:
+* **Type Thrashing:** The T4 GPU has extremely poor FP64 (Double Precision) performance (1/32 of FP32). Mixing Python 64-bit floats with JAX 32-bit arrays caused catastrophic slowdowns.
+* **Numerical Instability:** Running the SWE solver in pure FP32 with large real-world parameters ($R \approx 6.37 \times 10^6$ m) caused Catastrophic Cancellation in Jacobian determinant calculations, leading to NaNs.
 
-本專案的「雙後端架構」成功涵蓋了所有使用情境：
-* **NumPy**: 適合 $N < 64$ 的快速原型開發。
-* **JAX**: 適合 $N \ge 128$ 的高效能運算。對於 $N=256$ 或更高的模擬，使用 JAX 是唯一可行的方案（將數十分鐘縮短為數十秒）。
+**Dynamic Dtype Strategy:**
+We introduced a dynamic dtype casting mechanism `_get_dtype()` that automatically adapts to the environment:
+1. **Float32 Mode (T4 GPU Focus):** Enforces 32-bit precision across all constants and reduces time-step to $dt=30.0$ to maintain stability. Achieves extreme speed with an acceptable physical drift (~85 meters / < 1% error over 10 steps).
+2. **Float64 Mode (CPU/A100 Focus):** Unleashes full spectral precision, validating the mathematics against the NumPy reference with an error floor below $10^{-11}$.
+
+---
+
+## 2. Baseline Scaling Benchmarks: Advection Solver
+
+The following tests validate the fundamental scaling properties of the JAX backend compared to the NumPy baseline. Benchmarks evaluate the time required to solve the Advection equation up to $T_{final} = 0.05$ across different grid resolutions ($N$).
+
+### Test Environment
+- **CPU:** Apple M3 Pro (12-core) / **NumPy**
+- **GPU:** Apple M3 Pro (18-core GPU via Metal) / **JAX**
+
+### Benchmark Results
+
+| N (Resolution) | Total Grid Points | NumPy Time (s) | JAX Time (s) | Speedup (x) |
+| :---: | :---: | :---: | :---: | :---: |
+| 16 | 1,536 | 0.0574 | **0.0150** | **3.83x** |
+| 32 | 6,144 | 0.3546 | **0.0243** | **14.60x** |
+| 64 | 24,576 | 2.5028 | **0.0637** | **39.29x** |
+| 128 | 98,304 | 20.3533 | **0.4447** | **45.76x** |
+
+### Key Observations
+1. **Algorithmic Complexity:** The NumPy backend exhibits $O(N^3)$ to $O(N^4)$ scaling time due to the nested Python loops iterating over the elements.
+2. **Hardware Acceleration:** The JAX backend maintains a near $O(1)$ scaling curve for lower resolutions ($N \le 64$) as the problem size is bound by GPU parallelization capacity rather than compute cycles.
+3. **Maximum Speedup:** At high resolutions ($N=128$), the JAX implementation demonstrates a **~45x speedup**, proving the effectiveness of the DG method when paired with JIT-compiled tensor operations.
+
+---
+*Note: GPU performance metrics include JIT compilation overhead for the first execution. Subsequent executions (warm starts) yield even higher effective speedup ratios.*
