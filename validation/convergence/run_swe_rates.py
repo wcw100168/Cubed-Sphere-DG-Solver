@@ -25,7 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from cubed_sphere.solvers import CubedSphereSWE, SWEConfig
 
-def run_case2(N, dt, backend='numpy'):
+def run_case2(N, backend='numpy'):
     """
     Run Williamson Case 2 (Steady State) for 1 Day.
     Returns (L2 Relative Error, Linf Relative Error) for Height Field h.
@@ -53,7 +53,7 @@ def run_case2(N, dt, backend='numpy'):
         Omega=Omega,
         gravity=g,
         H_avg=h0,
-        dt=dt,
+        dt=None,         # Auto-calc safe dt
         backend=backend, # Dynamic backend
         filter_order=16  # Active filtering for stability
     )
@@ -183,10 +183,10 @@ def main():
     results = []
     
     for i, N in enumerate(resolutions):
-        dt = K_dt / (N**2)
+        # dt is now auto-calculated by solver for stability (CFL=const)
         
         try:
-            l2, linf = run_case2(N, dt, backend=args.backend)
+            l2, linf = run_case2(N, backend=args.backend)
         except Exception as e:
             print(f"Error at N={N}: {e}")
             import traceback

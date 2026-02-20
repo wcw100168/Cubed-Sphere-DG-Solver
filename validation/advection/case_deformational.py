@@ -229,12 +229,14 @@ def main():
         print("Re-transferring updated wind fields to JAX device...")
         solver._to_jax()
 
-    # Recalculate dt based on actual max velocity
-    # u_prime max is around (R/3) * (3*sqrt(2)/2 * 0.5) roughly R*0.7?
-    dt_safe = args.cfl * R / (v_max_global * args.N**2)
+    # Update solver configuration with actual max velocity so compute_safe_dt works
+    solver.cfg.u0 = float(v_max_global)
+    
+    # Let solver compute safe dt
+    dt_safe = solver.compute_safe_dt(None, args.cfl) # State can be None for advection as u0 is static in config
     print(f"Computed Max Velocity: {v_max_global:.2f} m/s")
     print(f"Adjusted dt: {dt_safe:.4f} s")
-    solver.cfg.dt = dt_safe # Inject into config
+    # No need to set solver.cfg.dt, passing dt=None in config is sufficient
     
     # --- 3. Initial Condition & Exact Solution ---
     def get_exact_solution(t_time):

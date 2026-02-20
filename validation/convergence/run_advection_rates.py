@@ -34,15 +34,19 @@ def run_simulation_gaussian(N, CFL=1.0):
     
     # Time step estimation strictly following notebook logic
     # dt = (CFL / u0) * (2 / N^2)
-    dt = (CFL / u0) * (2.0 / (N*N))
+    # Refactored: Use solver's internal safety calculation
     
     # Configure Solver
     config = AdvectionConfig(
         N=N,
         R=R,
-        dt=dt,
+        dt=None, # Auto-calculated safe dt
         u0=u0,
         alpha0=0.0, # Zonal flow (alpha=0) to match simplest reference case
+        CFL=CFL*2.0 # Adjust CFL to match previous factor of 2 safety margin if needed, or rely on solver defaults
+                    # Solver uses dt = CFL * R / (V_max * N^2). 
+                    # Previous Manual: dt = CFL * 2 * R / (u0 * N^2).
+                    # To match, effectively CFL_solver = 2 * CFL_manual.
     )
     
     solver = CubedSphereAdvection(config)

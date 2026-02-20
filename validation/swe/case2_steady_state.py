@@ -32,7 +32,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.0, help="Flow angle in degrees")
     parser.add_argument("--days", type=float, default=5.0, help="Simulation duration in days")
     parser.add_argument("--backend", type=str, default="numpy", choices=["numpy", "jax"])
-    parser.add_argument("--dt", type=float, default=30.0, help="Force time step")
+    parser.add_argument("--dt", type=float, default=None, help="Force time step (optional)")
     args = parser.parse_args()
 
     # Constants

@@ -586,16 +586,49 @@ class CubedSphereSWEJax(BaseSolver):
         (final_state, final_time), _ = lax.scan(scan_body, (state, t_start), None, length=num_steps)
         return final_state, final_time
 
+    def _get_max_wave_speed(self, state):
+        """
+        JAX implementation of wave speed: v_max = max(|u| + sqrt(gH))
+        """
+        # 1. State Decomp (Assumed Valid JAX Arrays)
+        # state: (3, 6, N, N)
+        mass = state[0]      # h * sqrt_g
+        u1_cov = state[1]    # Covariant u1
+        u2_cov = state[2]    # Covariant u2
+        
+        # 2. Metrics (Stacked)
+        metrics = self.stacked_metrics
+        sqrt_g = metrics.sqrt_g
+        g_inv = metrics.g_inv # (6, N, N, 2, 2)
+        
+        # Height h = mass / sqrt_g
+        h = mass / sqrt_g
+        
+        # Contravariant Velocity (u^i = g^ij u_j)
+        u1_con = g_inv[...,0,0]*u1_cov + g_inv[...,0,1]*u2_cov
+        u2_con = g_inv[...,1,0]*u1_cov + g_inv[...,1,1]*u2_cov
+        
+        # Velocity Magnitude Squared (|u|^2 = u_i u^i)
+        u_sq = u1_cov * u1_con + u2_cov * u2_con
+        u_mag = jnp.sqrt(u_sq)
+        
+        # Gravity Wave Speed
+        c_wave = jnp.sqrt(self.gravity * h)
+        
+        # Max characteristic speed (Global Max)
+        lambda_max = jnp.max(u_mag + c_wave)
+        return float(lambda_max) # Ensure Python float for dt calc
+
     def solve(self, t_span: Tuple[float, float], initial_state: Union[np.ndarray, Array], callbacks: List[Any] = None) -> np.ndarray:
         t, t_end = t_span
         state = jnp.array(initial_state)
         
         dt_algo = self.config.get('dt', None)
         if dt_algo is None:
-            dx_est = (self.R * 1.5) / self.N
-            c_wave = math.sqrt(GRAVITY * self.config.get('H_avg', 10000.0))
-            dt_algo = 0.5 * dx_est / c_wave 
-            print(f"[JAX] Auto-estimated dt: {dt_algo:.4f}s")
+            # Auto-compute CFL-based dt
+            cfl = self.config.get('CFL', 0.1)
+            dt_algo = self.compute_safe_dt(state, cfl=cfl)
+            print(f"[JAX] Auto-computed Safe dt: {dt_algo:.6f}s (CFL={cfl})")
         else:
             dt_algo = float(dt_algo)
             

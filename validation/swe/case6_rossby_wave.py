@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--N", type=int, default=32, help="Polynomial order")
     parser.add_argument("--days", type=float, default=14.0, help="Simulation duration in days")
     parser.add_argument("--backend", type=str, default="numpy", choices=["numpy", "jax"])
-    parser.add_argument("--dt", type=float, default=30.0, help="Time step (s)")
+    parser.add_argument("--dt", type=float, default=None, help="Time step (s) [default: auto]")
     parser.add_argument("--output", type=str, default="rossby_wave_comparison.png", help="Output plot file")
     args = parser.parse_args()
 

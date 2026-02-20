@@ -21,9 +21,7 @@ def main():
     target_cfl = 1.0 # Advection can often handle CFL~1 with RK strong stability
     
     # 2. Dynamic Time Step (Stability ~ 1/N^2)
-    # dt = CFL / (v_max * N^2)
-    dt = target_cfl / (u_max * N**2)
-    print(f"Computed dt: {dt:.5f} (N={N}, u_max={u_max:.2f}, CFL={target_cfl})")
+    # Handled by solver automatically
     
     config = AdvectionConfig(
         N=N,
@@ -31,7 +29,7 @@ def main():
         u0=u_max,
         alpha0=0.0,
         CFL=target_cfl,
-        dt=dt, # Explicitly valid stability condition
+        dt=None, # Auto-calc safe dt
         T_final=1.0,
         backend=backend
     )
@@ -40,6 +38,10 @@ def main():
     
     # Initialize Solver (Stateless Physics Definition)
     solver = CubedSphereAdvectionSolver(config)
+    
+    # Optional: Retrieve computed dt for display
+    # (Note: compute_safe_dt requires a state, or we can rely on heuristic if implemented)
+    # For now, just let user know it's auto.
     
     # Generate Initial State separately (Data)
     initial_state = solver.get_initial_condition(type="gaussian")

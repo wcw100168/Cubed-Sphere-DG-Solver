@@ -38,16 +38,13 @@ def main():
     alpha_rad = np.deg2rad(args.alpha)
     
     # Stability Calculation (CFL)
-    # v_max = u0 (Solid Body Rotation max speed is u0 at equator relative to flow axis)
-    # dt = CFL * R / (v_max * N^2)  (Approximate DG scaling)
-    dt = args.cfl * R / (u0 * args.N**2)
+    # Handled by solver automatically now via compute_safe_dt
     
     print(f"--- Williamson Case 1 (Cosine Bell) ---")
     print(f"Backend: {args.backend}")
     print(f"Grid: N={args.N}")
     print(f"Flow Angle: {args.alpha} deg")
     print(f"Time Period: {T_days} days ({T_sec:.1f} s)")
-    print(f"Time Step dt: {dt:.4f} s (Total Steps: {int(T_sec/dt)})")
     
     # Configure Solver
     config = AdvectionConfig(
@@ -56,11 +53,15 @@ def main():
         u0=u0,
         alpha0=alpha_rad, # The solver handles solid body rotation field internally via these params
         CFL=args.cfl,
-        dt=dt, # Explicit stable dt
+        dt=None, # Auto-calc
         backend=args.backend
     )
     
     solver = CubedSphereAdvectionSolver(config)
+
+    # Display approximate dt
+    # dt_est = solver.compute_safe_dt(None, args.cfl)
+    # print(f"Time Step dt: {dt_est:.4f} s (Total Steps: {int(T_sec/dt_est)})")
     
     # Initial Condition: Cosine Bell
     # Center (lon, lat) = (3*pi/2, 0) -> (270 deg, 0 deg)

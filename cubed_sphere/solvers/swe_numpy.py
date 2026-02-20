@@ -471,6 +471,52 @@ class CubedSphereSWENumpy(BaseSolver):
         
         return local_state
 
+    def _get_max_wave_speed(self, state):
+        """
+        NumPy implementation of V_max = max(|u| + sqrt(gH))
+        state: (3, 6, N, N)
+        """
+        # Mass: (6, N, N)
+        mass = state[0]
+        
+        # Need sqrt_g for each face.
+        # solver.faces is dict, map to array (6, N, N)
+        # Assuming P1..P6 order matches state index 0..5
+        # We can construct these on the fly or cache them.
+        # Since this is NumPy and init time, we loop once.
+        
+        lambda_max = 0.0
+        
+        face_names = self.topology.FACE_MAP
+        for i, fname in enumerate(face_names):
+            if fname not in self.faces: continue
+            
+            fg = self.faces[fname]
+            m = mass[i]
+            h = m / fg.sqrt_g
+            
+            # Covariant
+            u1_cov = state[1, i]
+            u2_cov = state[2, i]
+            
+            # Metric Tensor
+            g_inv = fg.g_inv # (N, N, 2, 2)
+            
+            # Contravariant
+            u1_con = g_inv[...,0,0]*u1_cov + g_inv[...,0,1]*u2_cov
+            u2_con = g_inv[...,1,0]*u1_cov + g_inv[...,1,1]*u2_cov
+            
+            # Mag Squared
+            u_sq = u1_cov * u1_con + u2_cov * u2_con
+            u_mag = np.sqrt(np.maximum(u_sq, 0)) # Clip negative zeros
+            
+            c_wave = np.sqrt(GRAVITY * h)
+            
+            face_max = np.max(u_mag + c_wave)
+            lambda_max = max(lambda_max, face_max)
+            
+        return float(lambda_max)
+
     def solve(self, t_span: Tuple[float, float], initial_state: np.ndarray, callbacks: List[Any] = None) -> np.ndarray:
         """
         Run simulation from t_span[0] to t_span[1] starting with initial_state.
@@ -481,12 +527,9 @@ class CubedSphereSWENumpy(BaseSolver):
         
         # Automatic dt estimation if not provided
         if dt_algo is None:
-            # Estimate C = sqrt(gH) ~ 300 m/s
-            # dx ~ R / N. (Actually pi R / 2 / N)
-            dx_est = (self.R * 1.5) / self.N
-            c_wave = math.sqrt(GRAVITY * self.config.get('H_avg', 10000.0))
-            dt_algo = 0.5 * dx_est / c_wave # CFL ~ 0.5
-            print(f"Auto-estimated dt: {dt_algo:.4f}s")
+            cfl = self.config.get('CFL', 0.1)
+            dt_algo = self.compute_safe_dt(state, cfl=cfl)
+            print(f"[NumPy] Auto-computed Safe dt: {dt_algo:.6f}s (CFL={cfl})")
         else:
             dt_algo = float(dt_algo)
             

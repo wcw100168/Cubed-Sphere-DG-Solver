@@ -166,51 +166,30 @@ def main():
     state_exact = None
     
     for N in N_values:
-        # Dynamic Time Step Scaling for DG (Stability ~ 1/N^2)
-        # 1. Estimate Wave Speed
-        # Case 2: u ~ 30-40 m/s, c = sqrt(gH) ~ 313 m/s
-        # v_max = |u| + c
-        u_max = 2.0 * np.pi * 6.37122e6 / (12.0 * 24.0 * 3600.0) # ~ 38 m/s
-        c_wave = np.sqrt(9.80616 * 10000.0) # ~ 313 m/s
-        v_total = u_max + c_wave
-        
-        # 2. Compute dt based on CFL target
+        # Case 2: Estimate wave speed for target CFL logic if needed
+        # But we rely on solver now.
         target_cfl = 0.5
-        # Note: Cubed Sphere element size scales with R/N. 
-        # But polynomial stiffness scales ~ N^2.
-        # dt ~ CFL * (Scale_Factor) / (v_max * N^2) usually.
-        # For simplicity here, we stick to the user mandate: dt = CFL / (v_max * N^2) * Scaling? 
-        # Actually, standard formula often includes Radius.
-        # dt = CFL * (R / N^2) / v_max ? 
-        # Let's use the provided User Formula: dt = CFL / (v_max * N^2) 
-        # BEWARE: This might be excessively small if "1" is not scaled by R.
-        # If v_max has units m/s, N is dimensionless. "1" needs length units?
-        # Re-reading prompt: "dt = CFL / (v_max * N^2)"
-        # If this results in 1e-9, simulations won't finish. 
-        # Context: Previous dt was 10.0 * (8/N)^2.
-        # Let's adapt the heuristic to be Dimensionally Consistent or relative to grid.
-        # Grid spacing dx ~ R / N.
-        # CFL = v_max * dt / (dx / N) ~ v_max * dt * N / (R/N) = v * dt * N^2 / R
-        # => dt = CFL * R / (v_max * N^2).
-        
-        R_earth = 6.37122e6
-        dt = target_cfl * R_earth / (v_total * N**2)
         
         config = SWEConfig(
             N=N,
-            R=R_earth,
+            R=6.37122e6,
             Omega=7.292e-5,
             gravity=9.80616,
             H_avg=10000.0,
             backend=args.backend,
             filter_order=16, # Fixed filter order
-            dt=dt
+            dt=None, # Auto-calc
+            CFL=target_cfl # Explicitly set CFL for stability
         )
         
         solver = CubedSphereSWE(config)
         
         # Setup Initial Condition
         initial_state = setup_case2_initial_condition(solver, config)
+        
+        # Get dt for reporting
+        dt = solver.compute_safe_dt(initial_state, cfl=target_cfl)
+
         
         # Run
         start_time = time.time()
