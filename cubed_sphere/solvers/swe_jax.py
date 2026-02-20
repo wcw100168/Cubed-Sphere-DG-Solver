@@ -246,6 +246,10 @@ class CubedSphereSWEJax(BaseSolver):
         return jnp.array(indices)
 
 
+    # Remove static_argnums for self, as it may cause hashing issues if treated as Pytree or similar.
+    # We pass all array args explicitly, so we don't need self to be static or dynamic really.
+    # But since it's a method bound to self, JAX JIT on methods treats self as the first arg.
+    # To be safe, we use 'static_argnums' only for integers/bools.
     @partial(jit, static_argnums=(0,))
     def _compute_rhs_core(self, t, global_state, stacked_metrics: FaceMetrics, D, neighbor_indices):
         """
@@ -572,7 +576,7 @@ class CubedSphereSWEJax(BaseSolver):
         return self._step_core(t, state, dt, self.stacked_metrics, self.D, 
                              self.rk_a, self.rk_b, self.filter_matrix, self.neighbor_indices)
 
-    @partial(jit, static_argnums=(0, 9))
+    @partial(jit, static_argnums=(0, 10))
     def run_simulation_scan(self, state: Array, t_start: float, dt: float, stacked_metrics, D, rk_a, rk_b, filter_mat, neighbor_indices, num_steps: int) -> Tuple[Array, float]:
         def scan_body(carry, _):
             s, t = carry
