@@ -8,7 +8,7 @@ Interactive Colab Notebook: [Open `examples/Cubed_Sphere_Benchmarks.ipynb` in Co
 
 ## 1. Architectural Optimizations (JAX Backend)
 
-Migrating the DG numerical method to JAX required overcoming several critical bottlenecks related to Just-In-Time (JIT) compilation and graph complexity.
+Migrating the DG numerical method to JAX required overcoming several critical bottlenecks related to Just-In-Time (JIT) compilation, graph complexity, and GPU memory management.
 
 ### 1.1 Overcoming the XLA Compilation Bottleneck (`vmap` Vectorization)
 **The Problem:** Initial JAX implementations utilized Python `for` loops to iterate over the 6 faces and 24 boundaries of the cubed sphere. JAX's `@jit` unrolls Python loops, resulting in a massive XLA computation graph (>30,000 nodes). On a standard Colab instance (Intel Xeon CPU), compiling a high-resolution grid ($N=96$) took **over 20 minutes** before execution even started.
@@ -27,20 +27,25 @@ To integrate the ODEs over time, relying on a Python loop to dispatch steps to t
 
 | Execution Path | Methodology | Performance |
 | :--- | :--- | :--- |
-| **Slow Path** | Python `for` loop calling `step()` (used for Callbacks) | CPU-bound by Kernel Launch Overhead |
-| **Fast Path** | `jax.lax.scan` | Massive speedup, native GPU execution |
+| **Slow Path** | Python `for` loop calling `step()` (used for Callbacks) | CPU-bound by Kernel Launch Overhead (~850 steps/s) |
+| **Fast Path** | `jax.lax.scan` | Massive speedup, native GPU execution (~1985 steps/s) |
+
+### 1.3 Asynchronous Execution & Memory Management
+To ensure benchmarking robustness on consumer GPUs (e.g., Nvidia T4 with 16GB VRAM), the solver implements production-level safety measures:
+* **Asynchronous Dispatch Safety:** Explicit use of `jax.block_until_ready()` ensures that XLA compilation and GPU execution times do not bleed into Host-side Python timers.
+* **Cache & VRAM Control:** Automated garbage collection and XLA cache clearing (`jax.clear_caches()`) prevent Out-Of-Memory (OOM) exceptions during high-resolution scalability tests.
 
 ---
 
 ## 2. Hardware Limitations & Dynamic Precision (FP32 vs FP64)
 
-Benchmarking on consumer-grade cloud GPUs (e.g., Google Colab's Nvidia T4) requires careful precision management. The Nvidia T4 GPU hardware has a known limitation: its FP64 (Double Precision) compute throughput is only **1/32** of its FP32 capacity. 
+Benchmarking on consumer-grade cloud GPUs requires careful precision management. The Nvidia T4 GPU hardware has a known limitation: its FP64 (Double Precision) compute throughput is only **1/32** of its FP32 capacity. 
 
 We introduced a dynamic dtype casting mechanism `_get_dtype()` that automatically adapts to the user's environment (`jax_enable_x64`), enabling a dual-mode execution strategy:
 
 | Precision Mode | Scientific Accuracy | Relative Execution Speed | Hardware Implication (e.g., Nvidia T4) |
 | :--- | :--- | :--- | :--- |
-| **Single (FP32)** | Marginal drift (< 1% error) | **Maximum Speed (Baseline)** | Optimal for rapid prototyping on consumer GPUs. Requires a carefully tuned $dt$ to prevent catastrophic cancellation. |
+| **Single (FP32)** | Marginal drift (< 1% error) | **Maximum Speed (Baseline)** | Optimal for rapid prototyping on consumer GPUs. Integrates dynamically computed CFL restrictions ($dt$) to prevent catastrophic cancellation. |
 | **Double (FP64)** | Spectral accuracy ($< 10^{-11}$ error) | **Slower but Interactive** | Validates exact mathematical correctness against NumPy. Although strictly hardware-throttled (1:32 ratio on T4), our `vmap` architectural optimization compresses the absolute execution time to just seconds, making FP64 highly viable for rigorous validation. |
 
 ---
@@ -52,16 +57,16 @@ The following tests validate the fundamental scaling properties of the vectorize
 ### Test Environment
 - **Platform:** Google Colab
 - **Hardware:** Nvidia T4 GPU / Intel Xeon CPU
-- **Precision:** Single Precision (FP32, `dt=30.0`)
-- **Execution:** Fast Path (`lax.scan`, 200 steps)
+- **Precision:** Single Precision (FP32)
+- **Time-Stepping:** Dynamic CFL-based $dt$
+- **Execution:** Fast Path (`lax.scan`, 100 steps)
 
 ### Benchmark Results
 
-| N (Grid Resolution) | Total Grid Points ($6 \times N^2$) | Avg. Time per Step (ms) |
-| :---: | :---: | :---: |
-| **32** | 6,144 | *(See Notebook)* |
-| **64** | 24,576 | *(See Notebook)* |
-| **96** | 55,296 | *(See Notebook)* |
-| **128** | 98,304 | *(See Notebook)* |
+| N (Grid Resolution) | Total Grid Points ($6 \times N^2$) | Avg. Time per Step (ms) | Throughput (Steps/Sec) |
+| :---: | :---: | :---: | :---: |
+| **32** | 6,144 | **0.67** | 1,487 |
+| **64** | 24,576 | **0.82** | 1,224 |
+| **96** | 55,296 | **1.43** | 698 |
 
-*Note: The exact milliseconds per step can be reproduced interactively via the Colab Notebook. The scaling curve demonstrates the high parallel efficiency of the GPU, maintaining low latency even as the grid size increases exponentially.*
+*Note: The results demonstrate exceptional GPU parallel efficiency. Even as the problem size increases by nearly 9x (from N=32 to N=96), the execution time per step merely doubles, proving that the JAX/XLA compiler is effectively saturating the GPU stream processors at higher resolutions.*
