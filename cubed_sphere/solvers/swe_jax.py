@@ -161,32 +161,38 @@ class CubedSphereSWEJax(BaseSolver):
         Uses the provided D_np (numpy diff matrix) to avoid JAX/Numpy mixing errors.
         """
         scale = 4.0 / np.pi
-        
-        # NumPy Operations
+
+        # Keep tangent vectors for projections (spectral derivatives)
         g1_x = D_np @ fg.X * scale
         g2_x = fg.X @ D_np.T * scale 
         g1_y = D_np @ fg.Y * scale
         g2_y = fg.Y @ D_np.T * scale
         g1_z = D_np @ fg.Z * scale
         g2_z = fg.Z @ D_np.T * scale
-        
         g1_vec = np.stack([g1_x, g1_y, g1_z], axis=-1)
         g2_vec = np.stack([g2_x, g2_y, g2_z], axis=-1)
-        
-        g11 = np.sum(g1_vec * g1_vec, axis=-1)
-        g22 = np.sum(g2_vec * g2_vec, axis=-1)
-        g12 = np.sum(g1_vec * g2_vec, axis=-1)
-        
-        det = g11*g22 - g12**2
+
+        # Exact equiangular covariant metrics and Jacobian
+        A = np.tan(fg.alpha)
+        B = np.tan(fg.beta)
+        cos_a = np.cos(fg.alpha)
+        cos_b = np.cos(fg.beta)
+        rho = np.sqrt(1.0 + A**2 + B**2)
+        rho4 = rho**4
+
+        g11 = (float(self.R)**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
+        g22 = (float(self.R)**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
+        g12 = -(float(self.R)**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
+
+        det = g11 * g22 - g12**2
         inv_det = 1.0 / det
-        
+
         g_inv = np.zeros(g11.shape + (2, 2))
         g_inv[..., 0, 0] = g22 * inv_det
         g_inv[..., 1, 1] = g11 * inv_det
         g_inv[..., 0, 1] = -g12 * inv_det
         g_inv[..., 1, 0] = -g12 * inv_det
-        
-        # Calculate g_ij (Covariant)
+
         g_ij = np.zeros(g11.shape + (2, 2))
         g_ij[..., 0, 0] = g11
         g_ij[..., 1, 1] = g22
@@ -202,7 +208,7 @@ class CubedSphereSWEJax(BaseSolver):
         fg.g2_vec = jnp.array(g2_vec, dtype=self.dtype)
         fg.g_inv = jnp.array(g_inv, dtype=self.dtype)
         fg.g_ij  = jnp.array(g_ij, dtype=self.dtype)
-        fg.sqrt_g = jnp.array(fg.sqrt_g, dtype=self.dtype) # Use existing analytical sqrt_g
+        fg.sqrt_g = jnp.array((float(self.R)**2) / (rho**3 * (cos_a**2) * (cos_b**2)), dtype=self.dtype)
         fg.f_coriolis = jnp.array(f_coriolis, dtype=self.dtype)
 
         # Store lon/lat for utility (NumPy or JAX, doesn't matter for JIT as config)

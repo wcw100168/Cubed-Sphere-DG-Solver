@@ -147,57 +147,45 @@ class CubedSphereSWENumpy(BaseSolver):
         Augment the FaceGrid object with strict metric tensor components
         required by the Vector Invariant Formulation.
         """
-        # Re-compute X, Y, Z derivatives locally using D matrix
-        # Note: mapping is on [-1, 1] for D.
-        # generate_face maps nodes to Equiangular, which implies a range.
-        # But D is spectral Differentiation on the index space.
-        # We need the mapping factor if the D matrix is on [-1, 1] 
-        # but the physical variable is parameterized by alpha in [-pi/4, pi/4].
-        # d/dAlpha = (d/dZeta) * (dZeta/dAlpha).
-        # Zeta [-1, 1], Alpha [-pi/4, pi/4] -> Scale = 2 / (pi/2) = 4/pi.
+        # Keep tangent vectors for projections (derived spectrally)
         scale = 4.0 / np.pi
-        
-        # We can apply D to the Cartesian coordinates X, Y, Z (which are computed in generate_face)
-        # to get basis vectors (tangent vectors).
-        
-        # g1 = d/dAlpha, g2 = d/dBeta
         g1_x = self.D @ fg.X * scale
-        g2_x = fg.X @ self.D.T * scale # Note: Right multiplication for Beta derivative
+        g2_x = fg.X @ self.D.T * scale
         g1_y = self.D @ fg.Y * scale
         g2_y = fg.Y @ self.D.T * scale
         g1_z = self.D @ fg.Z * scale
         g2_z = fg.Z @ self.D.T * scale
-        
-        # Pack vectors: (N, N, 3)
         fg.g1_vec = np.stack([g1_x, g1_y, g1_z], axis=-1)
         fg.g2_vec = np.stack([g2_x, g2_y, g2_z], axis=-1)
-        
-        # Metric Tensor g_ij (Covariant)
-        g11 = np.sum(fg.g1_vec * fg.g1_vec, axis=-1)
-        g22 = np.sum(fg.g2_vec * fg.g2_vec, axis=-1)
-        g12 = np.sum(fg.g1_vec * fg.g2_vec, axis=-1)
-        
-        # Inverse Metric g^ij (Contravariant)
-        det = g11*g22 - g12**2
+
+        # Exact equiangular covariant metrics and Jacobian
+        A = np.tan(fg.alpha)
+        B = np.tan(fg.beta)
+        cos_a = np.cos(fg.alpha)
+        cos_b = np.cos(fg.beta)
+        rho = np.sqrt(1.0 + A**2 + B**2)
+        rho4 = rho**4
+
+        g11 = (self.R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
+        g22 = (self.R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
+        g12 = -(self.R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
+
+        det = g11 * g22 - g12**2
         inv_det = 1.0 / det
-        
-        # fg.sqrt_g = np.sqrt(det) # Numerical Jacobian (optional, currently using Analytic)
-        
-        # Store as (N, N, 2, 2)
+
         fg.g_ij = np.zeros(g11.shape + (2, 2))
         fg.g_ij[..., 0, 0] = g11
         fg.g_ij[..., 1, 1] = g22
         fg.g_ij[..., 0, 1] = g12
         fg.g_ij[..., 1, 0] = g12
-        
+
         fg.g_inv = np.zeros(g11.shape + (2, 2))
         fg.g_inv[..., 0, 0] = g22 * inv_det
         fg.g_inv[..., 1, 1] = g11 * inv_det
         fg.g_inv[..., 0, 1] = -g12 * inv_det
         fg.g_inv[..., 1, 0] = -g12 * inv_det
-        
-        # Jacobian (Override/Verify existing sqrt_g)
-        # fg.sqrt_g = np.sqrt(det) # Use Analytical Jacobian from Geometry instead of Numerical
+
+        fg.sqrt_g = (self.R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
         
         # Coriolis
         lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)

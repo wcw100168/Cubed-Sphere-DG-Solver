@@ -74,30 +74,21 @@ class CubedSphereAdvectionSolver(BaseSolver):
         """
         Precompute static geometric fields (metrics) and wind velocity.
         """
-        # Scale for spectral differentiation (from [-1, 1] to [-pi/4, pi/4])
-        scale = 4.0 / np.pi
-
         for fname, fg in self.faces.items():
-            # --- 1. Compute Metric Tensor Components (Covariant g_ij) ---
-            # Used for calculating physical velocity magnitude |u|^2 = g_ij u^i u^j
-            
-            # Basis vectors (Tangent vectors): g_1 = dX/dAlpha, g_2 = dX/dBeta
-            # D matrix represents d/dZeta. d/dAlpha = (dZeta/dAlpha) * d/dZeta = (4/pi) * D
-            
-            # Derivatives wrt Alpha (use pre-computed D_cpu for initialization)
-            g1_x = self.D_cpu @ fg.X * scale
-            g1_y = self.D_cpu @ fg.Y * scale
-            g1_z = self.D_cpu @ fg.Z * scale
-            
-            # Derivatives wrt Beta
-            g2_x = fg.X @ self.D_cpu.T * scale
-            g2_y = fg.Y @ self.D_cpu.T * scale
-            g2_z = fg.Z @ self.D_cpu.T * scale
-            
-            # Metric Components (Dot products of basis vectors)
-            fg.g_11 = g1_x*g1_x + g1_y*g1_y + g1_z*g1_z
-            fg.g_22 = g2_x*g2_x + g2_y*g2_y + g2_z*g2_z
-            fg.g_12 = g1_x*g2_x + g1_y*g2_y + g1_z*g2_z
+            # --- 1. Exact Equiangular Cubed-Sphere Metrics (covariant) ---
+            A = np.tan(fg.alpha)
+            B = np.tan(fg.beta)
+            cos_a = np.cos(fg.alpha)
+            cos_b = np.cos(fg.beta)
+            rho = np.sqrt(1.0 + A**2 + B**2)
+            rho4 = rho**4
+
+            fg.g_11 = (self.R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
+            fg.g_22 = (self.R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
+            fg.g_12 = -(self.R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
+
+            # Jacobian (recompute from analytic expression to avoid drift)
+            fg.sqrt_g = (self.R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
 
             # --- 2. Physical wind (Spherical) ---
             u_sph, v_sph = self.geometry.solid_body_wind(fg.X, fg.Y, fg.Z, alpha0, u0)
