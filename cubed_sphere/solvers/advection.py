@@ -366,7 +366,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
 
     def _step_jax(self, state, dt):
         """Standard LSRK5 step (functional style for JAX JIT)"""
-        du = self.xp.zeros_like(state)
+        du = state * 0.0
         local_state = state
         
         # Unroll loop for JIT trace
@@ -592,15 +592,4 @@ class CubedSphereAdvectionSolver(BaseSolver):
                     cb(current_time, current_state_np)
                     
         print("=== Simulation Complete (JAX) ===")
-        return state
-            
-        # 2. Residual step (if needed)
-        if residual > 1e-12:
-            print(f"Performing residual step dt={residual:.5e}")
-            state = self._jit_step(state, residual)
-
-        print("=== Simulation Complete (JAX) ===")
-        return state 
-        # API contract says "return final_state". If user wants numpy, they can convert.
-        # But 'solve' usually returns framework-native output.
         return state

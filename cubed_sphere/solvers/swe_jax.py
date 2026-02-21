@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jax import jit, Array, vmap
+from jax import jit, lax, Array, vmap
 import numpy as np
 import dataclasses
 from functools import partial
