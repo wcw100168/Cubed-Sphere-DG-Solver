@@ -77,7 +77,8 @@ class CubedSphereTopology:
         Parameters
         ----------
         global_state : np.ndarray
-            Shape (6, N, N) containing data for all faces.
+            Array with face dimension in position -3 (e.g., (n_vars, 6, N+1, N+1)
+            or (6, N+1, N+1)).
         face_idx : int
             Index of the current face.
         side_idx : int
@@ -86,7 +87,8 @@ class CubedSphereTopology:
         Returns
         -------
         slice_data : np.ndarray
-            1D array of neighbor boundary data.
+            Boundary slice of shape (..., N+1) along the requested edge, with
+            reversal applied when required by topology.
         """
         nbr_face, nbr_side, swap, reverse = self.CONN_TABLE[(face_idx, side_idx)]
         

@@ -84,6 +84,7 @@ def demo_regrid_init():
     
     config = AdvectionConfig(N=32, T_final=0.0)
     solver = CubedSphereAdvectionSolver(config)
+    num_nodes = config.N + 1
     
     # 1. Create Mock Weather Data (Lat/Lon Grid)
     n_lat, n_lon = 90, 180
@@ -100,7 +101,7 @@ def demo_regrid_init():
     print(f"Mock Data shape: {weather_data.shape} (Lat x Lon)")
     
     # 2. Regrid to Cubed Sphere
-    state = np.zeros((6, config.N, config.N))
+    state = np.zeros((6, num_nodes, num_nodes))
     
     print("Regridding...")
     for i, fname in enumerate(solver.topology.FACE_MAP):

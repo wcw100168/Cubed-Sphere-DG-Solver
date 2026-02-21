@@ -79,6 +79,7 @@ class CubedSphereSWENumpy(BaseSolver):
         super().__init__(config)
         self.N = config.get('N', 32)
         self.R = config.get('R', EARTH_RADIUS)
+        self.gravity = config.get('gravity', GRAVITY)
         
         # 1. Topology & Geometry
         self.topology = CubedSphereTopology()
@@ -310,7 +311,7 @@ class CubedSphereSWENumpy(BaseSolver):
             abs_vort = vort + fg.f_coriolis
 
             KE  = 0.5 * (u1_cov * u1_con + u2_cov * u2_con)
-            Phi = GRAVITY * h
+            Phi = self.gravity * h
             E   = KE + Phi
 
             # ==============================================================
@@ -406,8 +407,8 @@ class CubedSphereSWENumpy(BaseSolver):
                 g_ii = fg.g_inv[idx][..., 0, 0] if side < 2 \
                     else fg.g_inv[idx][..., 1, 1]
 
-                c_in  = np.sqrt(GRAVITY * h_in  * g_ii)
-                c_out = np.sqrt(GRAVITY * h_out * g_ii)
+                c_in  = np.sqrt(self.gravity * h_in  * g_ii)
+                c_out = np.sqrt(self.gravity * h_out * g_ii)
 
                 wave_speed = np.maximum(np.abs(vn) + c_in,
                                         np.abs(vn_out) + c_out)
@@ -437,10 +438,10 @@ class CubedSphereSWENumpy(BaseSolver):
                             u2_in * g_inv_loc[..., 1, 1])
                 )
 
-                E_in  = KE_in + GRAVITY * h_in
+                E_in  = KE_in + self.gravity * h_in
                 KE_out = 0.5 * (u1_out * u1_con_out +
                                 u2_out * u2_con_out)
-                E_out = KE_out + GRAVITY * h_out
+                E_out = KE_out + self.gravity * h_out
 
                 F_u1_in  = E_in  * nx
                 F_u1_out = E_out * nx
@@ -547,7 +548,7 @@ class CubedSphereSWENumpy(BaseSolver):
             u_sq = u1_cov * u1_con + u2_cov * u2_con
             u_mag = np.sqrt(np.maximum(u_sq, 0)) # Clip negative zeros
             
-            c_wave = np.sqrt(GRAVITY * h)
+            c_wave = np.sqrt(self.gravity * h)
             
             face_max = np.max(u_mag + c_wave)
             lambda_max = max(lambda_max, face_max)

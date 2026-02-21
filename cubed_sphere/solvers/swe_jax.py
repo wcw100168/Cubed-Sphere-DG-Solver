@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jax import jit, lax, Array, vmap
+from jax import jit, Array, vmap
 import numpy as np
 import dataclasses
 from functools import partial
@@ -10,7 +10,6 @@ from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangul
 from cubed_sphere.numerics.spectral import lgl_diff_matrix, lgl_nodes_weights
 from cubed_sphere.physics.initialization import get_initial_state
 from numpy.polynomial.legendre import Legendre
-from jax import lax
 import math
 
 # Physics Constants
@@ -68,7 +67,8 @@ class CubedSphereSWEJax(BaseSolver):
         # Ensure constants are Arrays with correct dtype
         self.R = jnp.array(config.get('R', EARTH_RADIUS), dtype=self.dtype)
         self.omega = jnp.array(OMEGA, dtype=self.dtype)
-        self.gravity = jnp.array(GRAVITY, dtype=self.dtype)
+        g_val = config.get('gravity', GRAVITY)
+        self.gravity = jnp.array(g_val, dtype=self.dtype)
         
         # 1. Topology & Geometry
         self.topology = CubedSphereTopology()
@@ -152,7 +152,7 @@ class CubedSphereSWEJax(BaseSolver):
             case_type=case_id, 
             **self.config
         )
-        # Result is (3, 6, N, N)
+        # Shape: (3, 6, N+1, N+1) -> JAX DeviceArray on return
         return jax.device_put(state_np)
 
     def _compute_extended_metrics(self, fg: FaceGrid, D_np: np.ndarray):
@@ -479,8 +479,8 @@ class CubedSphereSWEJax(BaseSolver):
             elif side_idx == 3:
                 g_ii_edge = stacked_metrics.g_inv[..., 1, 1][:, :, -1]
                     
-            c_in = jnp.sqrt(GRAVITY * h_in * g_ii_edge)
-            c_out = jnp.sqrt(GRAVITY * h_out * g_ii_edge)
+            c_in = jnp.sqrt(self.gravity * h_in * g_ii_edge)
+            c_out = jnp.sqrt(self.gravity * h_out * g_ii_edge)
             wave_speed = jnp.maximum(jnp.abs(vn_in) + c_in, jnp.abs(vn_out) + c_out)
             
             sat_coeff = scale / w_node
@@ -504,10 +504,10 @@ class CubedSphereSWEJax(BaseSolver):
             u2_con_in_full = vmap(get_edge_slice_2d)(u2_con_all, jnp.full((6,), side_idx, dtype=jnp.int32))
             
             KE_in = 0.5 * (u1_in * u1_con_in_full + u2_in * u2_con_in_full)
-            E_in_val = KE_in + GRAVITY * h_in
+            E_in_val = KE_in + self.gravity * h_in
             
             KE_out = 0.5 * (u1_out_proj * u1_con_out + u2_out_proj * u2_con_out)
-            E_out_val = KE_out + GRAVITY * h_out
+            E_out_val = KE_out + self.gravity * h_out
             
             F_u1_in = E_in_val * nx; F_u1_out = E_out_val * nx
             F_u2_in = E_in_val * ny; F_u2_out = E_out_val * ny
@@ -553,7 +553,7 @@ class CubedSphereSWEJax(BaseSolver):
     def _step_core(self, t, state, dt, stacked_metrics, D, rk_a, rk_b, filter_mat, neighbor_indices):
         """Pure JAX RK5 Step"""
         local_state = state
-        du = jnp.zeros_like(state)
+        du = state * 0.0
         
         # RK5
         for k in range(5):
@@ -621,7 +621,8 @@ class CubedSphereSWEJax(BaseSolver):
 
     def solve(self, t_span: Tuple[float, float], initial_state: Union[np.ndarray, Array], callbacks: List[Any] = None) -> np.ndarray:
         t, t_end = t_span
-        state = jnp.array(initial_state)
+        from cubed_sphere import backend
+        state = backend.to_backend(initial_state, jnp)
         
         dt_algo = self.config.get('dt', None)
         if dt_algo is None:

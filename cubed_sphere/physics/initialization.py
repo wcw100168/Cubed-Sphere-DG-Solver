@@ -25,8 +25,9 @@ def get_initial_state(
         **kwargs: Additional parameters (e.g., 'alpha' for rotation angle).
         
     Returns:
-        np.ndarray: Initial state array of shape (3, 6, N+1, N+1).
-                    State variables: [Mass (h*sqrt_g), u1_cov, u2_cov]
+        np.ndarray: State array of shape (3, 6, N+1, N+1) where the face axis
+                    follows CubedSphereTopology.FACE_MAP. Variables are
+                    [Mass (h*sqrt_g), u1_cov, u2_cov].
     """
     # 1. Configuration Constants
     N = config.get('N', 32)

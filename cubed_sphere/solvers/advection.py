@@ -146,12 +146,23 @@ class CubedSphereAdvectionSolver(BaseSolver):
                               func: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
                               h0: float = 1.0, r0: Optional[float] = None) -> np.ndarray:
         """
-        Generate an initial scalar field phi.n_vars, 6, N, N).
-        
-        Args:
-            type: "gaussian", "cosine", or "custom" (requires func)
-            func: Callable f(lon, lat) -> value. lon/lat in radians.
-            h0, r0: Parameters for built-in types.
+        Generate an initial scalar state tensor.
+
+        Returns
+        -------
+        np.ndarray
+            Shape (n_vars, 6, N+1, N+1) where the face dimension is ordered per
+            CubedSphereTopology.FACE_MAP. For single-variable runs, the leading
+            dimension is still retained as 1 for consistency.
+
+        Parameters
+        ----------
+        type : str
+            "gaussian", "cosine", or "custom" (requires func).
+        func : Callable[[np.ndarray, np.ndarray], np.ndarray], optional
+            User-supplied function f(lon, lat) in radians for custom IC.
+        h0, r0 : float
+            Amplitude and radius parameters for built-in profiles.
         """
         if r0 is None: 
             r0 = self.cfg.R / 3.0
@@ -500,6 +511,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
         """
         import jax.lax as lax
         import numpy as np
+        from cubed_sphere import backend
         
         t_start, t_end = t_span
         duration = t_end - t_start
@@ -515,7 +527,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
             s_new = self._jit_step(s, dt_est)
             return s_new, None
 
-        state = initial_state
+        state = backend.to_backend(initial_state, self.xp)
         current_time = t_start
         
         # --- Strategy Selection ---

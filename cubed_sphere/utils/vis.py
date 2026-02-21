@@ -4,7 +4,6 @@ import matplotlib.colors as colors
 import matplotlib.cm as cm
 import matplotlib.animation as animation
 from matplotlib.colors import LinearSegmentedColormap
-from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional, List, Any
 
 # Define custom colormap

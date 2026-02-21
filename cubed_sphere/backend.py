@@ -29,6 +29,18 @@ def get_backend(name: str):
 def to_backend(arr: Any, backend_module: Any) -> Array:
     """
     Convert an array to the target backend format.
+
+    Parameters
+    ----------
+    arr : Any
+        Input array-like object.
+    backend_module : module
+        Either numpy or jax.numpy; determines the output type.
+
+    Returns
+    -------
+    Array
+        np.ndarray when backend is numpy; jax.numpy.DeviceArray otherwise.
     """
     if backend_module.__name__ == 'jax.numpy':
         import jax.numpy as jnp
