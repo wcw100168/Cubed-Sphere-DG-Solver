@@ -25,6 +25,8 @@ class CubedSphereAdvectionSolver(BaseSolver):
     def __init__(self, config: AdvectionConfig):
         super().__init__(dataclasses.asdict(config))
         self.cfg = config
+        self.N = config.N  # Required for BaseSolver.compute_safe_dt safety check
+        self.R = config.R  # Explicitly store R for consistency
         
         # Backend Setup
         from cubed_sphere import backend

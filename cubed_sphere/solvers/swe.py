@@ -30,6 +30,8 @@ class CubedSphereSWE(BaseSolver):
         super().__init__(dataclasses.asdict(config))
         # We also store the strongly-typed config for internal usage
         self.swe_config = config
+        self.N = config.N  # Required for BaseSolver.compute_safe_dt
+
         
         # Dispatch Backend
         if config.backend == 'numpy':

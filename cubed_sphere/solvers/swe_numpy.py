@@ -266,163 +266,200 @@ class CubedSphereSWENumpy(BaseSolver):
 
     def compute_rhs(self, t: float, global_state: np.ndarray) -> np.ndarray:
         """
-        Compute du/dt for the Shallow Water Equations.
-        Global State: (3, 6, N+1, N+1)  [Var-Major]
+        Compute RHS of the Shallow Water Equations (vector-invariant form).
+
+        global_state shape:
+            (3, 6, N+1, N+1)  -> [variable, face, alpha, beta]
+
+        Variables:
+            0 : m      = h * sqrt(g)
+            1 : u1_cov = covariant velocity component u_α
+            2 : u2_cov = covariant velocity component u_β
         """
         rhs = np.zeros_like(global_state)
         scale = 4.0 / np.pi
-        
-        # d/dAlpha, d/dBeta
+
+        # Spectral derivatives in reference space
         def da(F): return self.D @ F * scale
         def db(F): return F @ self.D.T * scale
-        
-        for i, fname in enumerate(self.topology.FACE_MAP):
-            fg = self.faces[fname]
-            
-            # Unpack Variables (3, N, N) from Var-Major state
-            m = global_state[0, i]
-            u1_cov = global_state[1, i]
-            u2_cov = global_state[2, i]
-            
-            h = m / fg.sqrt_g
-            
-            # 1. Contravariant Velocities
-            # u^i = g^ij u_j
-            u1_con = fg.g_inv[...,0,0]*u1_cov + fg.g_inv[...,0,1]*u2_cov
-            u2_con = fg.g_inv[...,1,0]*u1_cov + fg.g_inv[...,1,1]*u2_cov
-            
-            # 2. Vorticity & Energy
-            vort = (1.0 / fg.sqrt_g) * (da(u2_cov) - db(u1_cov))
-            abs_vort = vort + fg.f_coriolis
-            
-            KE = 0.5 * (u1_cov * u1_con + u2_cov * u2_con)
-            Phi = GRAVITY * h
-            E = KE + Phi
 
-            # 3. Fluxes 
+        # ------------------------------------------------------------------
+        # Loop over cubed-sphere faces
+        # ------------------------------------------------------------------
+        for i, fname in enumerate(self.topology.FACE_MAP):
+
+            fg = self.faces[fname]
+
+            # --- Unpack state ------------------------------------------------
+            m       = global_state[0, i]
+            u1_cov  = global_state[1, i]
+            u2_cov  = global_state[2, i]
+
+            h = m / fg.sqrt_g
+
+            # ==============================================================
+            # 1. Contravariant velocity: u^i = g^{ij} u_j
+            # ==============================================================
+            u1_con = fg.g_inv[..., 0, 0] * u1_cov + fg.g_inv[..., 0, 1] * u2_cov
+            u2_con = fg.g_inv[..., 1, 0] * u1_cov + fg.g_inv[..., 1, 1] * u2_cov
+
+            # ==============================================================
+            # 2. Vorticity, energy, and Bernoulli function
+            # ==============================================================
+            vort = (da(u2_cov) - db(u1_cov)) / fg.sqrt_g
+            abs_vort = vort + fg.f_coriolis
+
+            KE  = 0.5 * (u1_cov * u1_con + u2_cov * u2_con)
+            Phi = GRAVITY * h
+            E   = KE + Phi
+
+            # ==============================================================
+            # 3. Interior fluxes
+            # ==============================================================
+
+            # --- Mass conservation ----------------------------------------
             F_mass_1 = m * u1_con
             F_mass_2 = m * u2_con
-            
             div_mass = da(F_mass_1) + db(F_mass_2)
-            
+
+            # --- Momentum equation (vector-invariant form) ----------------
             grad_E_1 = da(E)
             grad_E_2 = db(E)
-            
-            # Source Terms (Vector Invariant Cor/Vort Force)
-            S_1 = fg.sqrt_g * u2_con * abs_vort
+
+            S_1 =  fg.sqrt_g * u2_con * abs_vort
             S_2 = -fg.sqrt_g * u1_con * abs_vort
-            
-            rhs[0, i] = -(div_mass)
+
+            rhs[0, i] = -div_mass
             rhs[1, i] = -grad_E_1 + S_1
             rhs[2, i] = -grad_E_2 + S_2
-            
-            # 4. SAT / Numerical Flux (Boundaries)
+
+            # ==============================================================
+            # 4. SAT boundary fluxes
+            # ==============================================================
+
             for side in range(4):
-                if side == 0:   # West
-                    idx = (slice(None), 0, slice(None)) # (3, N, N) -> last 2 dims are space
-                    # Oops, idx must index into (N,N). 
-                    # If side=0 (Alpha=0), we slice Dim 0 of the N,N block?
-                    # wait, standard layout is (Alpha, Beta).
-                    # Side 0 is Alpha Min (0).
-                    # Indexing for RHS (3, N, N):
-                    idx_rhs = (slice(None), 0, slice(None)) # Variable, Alpha=0, Beta=:
-                    idx_2d = (0, slice(None)) # Alpha=0, Beta=:
-                    
+
+                # ----------------------------------------------------------
+                # Boundary geometry & normal direction
+                # ----------------------------------------------------------
+                if side == 0:      # West (α = 0)
+                    idx = (0, slice(None))
                     nx, ny = -1, 0
                     w_node = fg.walpha[0]
-                    vn = -u1_con[idx_2d]
-                    
-                    # Boundary vectors
-                    g1_b = fg.g1_vec[0, :]; g2_b = fg.g2_vec[0, :]
-                    
-                elif side == 1: # East
-                    idx_rhs = (slice(None), -1, slice(None))
-                    idx_2d = (-1, slice(None))
+                    vn = -u1_con[idx]
+                    g1_b = fg.g1_vec[0, :]
+                    g2_b = fg.g2_vec[0, :]
+
+                elif side == 1:    # East (α = N)
+                    idx = (-1, slice(None))
                     nx, ny = 1, 0
                     w_node = fg.walpha[-1]
-                    vn = u1_con[idx_2d]
-                    g1_b = fg.g1_vec[-1, :]; g2_b = fg.g2_vec[-1, :]
-                    
-                elif side == 2: # South
-                    idx_rhs = (slice(None), slice(None), 0)
-                    idx_2d = (slice(None), 0)
+                    vn = u1_con[idx]
+                    g1_b = fg.g1_vec[-1, :]
+                    g2_b = fg.g2_vec[-1, :]
+
+                elif side == 2:    # South (β = 0)
+                    idx = (slice(None), 0)
                     nx, ny = 0, -1
                     w_node = fg.wbeta[0]
-                    vn = -u2_con[idx_2d]
-                    g1_b = fg.g1_vec[:, 0]; g2_b = fg.g2_vec[:, 0]
-                    
-                elif side == 3: # North
-                    idx_rhs = (slice(None), slice(None), -1)
-                    idx_2d = (slice(None), -1)
+                    vn = -u2_con[idx]
+                    g1_b = fg.g1_vec[:, 0]
+                    g2_b = fg.g2_vec[:, 0]
+
+                else:              # North (β = N)
+                    idx = (slice(None), -1)
                     nx, ny = 0, 1
                     w_node = fg.wbeta[-1]
-                    vn = u2_con[idx_2d]
-                    g1_b = fg.g1_vec[:, -1]; g2_b = fg.g2_vec[:, -1]
-                
-                # SAT Weight
+                    vn = u2_con[idx]
+                    g1_b = fg.g1_vec[:, -1]
+                    g2_b = fg.g2_vec[:, -1]
+
                 sat_coeff = scale / w_node
-                
-                # 4.1 Get External Data
+
+                # ----------------------------------------------------------
+                # 4.1 External boundary state
+                # ----------------------------------------------------------
                 m_out, V_out = self._get_boundary_flux_data(global_state, i, side)
-                m_in = m[idx_2d]
-                
-                # Project V_out to local vectors
-                # V_out is (N, 3). g1_b is (N, 3).
-                u1_out_proj = V_out[:,0]*g1_b[:,0] + V_out[:,1]*g1_b[:,1] + V_out[:,2]*g1_b[:,2]
-                u2_out_proj = V_out[:,0]*g2_b[:,0] + V_out[:,1]*g2_b[:,1] + V_out[:,2]*g2_b[:,2]
-                
-                # Reconstruct Contravariant
-                g11 = np.sum(g1_b*g1_b, axis=1)
-                g12 = np.sum(g1_b*g2_b, axis=1)
-                g22 = np.sum(g2_b*g2_b, axis=1)
-                det = g11*g22 - g12**2
-                
-                u1_con_out = (g22 * u1_out_proj - g12 * u2_out_proj) / det
-                u2_con_out = (g11 * u2_out_proj - g12 * u1_out_proj) / det
-                
+                m_in = m[idx]
+
+                # Project external Cartesian velocity onto local covariant basis
+                u1_out = np.sum(V_out * g1_b, axis=1)
+                u2_out = np.sum(V_out * g2_b, axis=1)
+
+                # Reconstruct contravariant components
+                g11 = np.sum(g1_b * g1_b, axis=1)
+                g12 = np.sum(g1_b * g2_b, axis=1)
+                g22 = np.sum(g2_b * g2_b, axis=1)
+                det = g11 * g22 - g12**2
+
+                u1_con_out = (g22 * u1_out - g12 * u2_out) / det
+                u2_con_out = (g11 * u2_out - g12 * u1_out) / det
+
                 vn_out = u1_con_out * nx + u2_con_out * ny
-                
-                # 4.2 Wave Speed Correction
-                h_in = m_in / fg.sqrt_g[idx_2d]
-                h_out = m_out / fg.sqrt_g[idx_2d] # Assuming conformal match of sqrt_g at boundary
-                
-                # Metric term g^ii
-                if side < 2:
-                    g_ii = fg.g_inv[idx_2d][..., 0, 0]
-                else:
-                    g_ii = fg.g_inv[idx_2d][..., 1, 1]
-                    
-                c_in = np.sqrt(GRAVITY * h_in * g_ii)
+
+                # ----------------------------------------------------------
+                # 4.2 Wave speed (Rusanov type)
+                # ----------------------------------------------------------
+                h_in  = m_in  / fg.sqrt_g[idx]
+                h_out = m_out / fg.sqrt_g[idx]
+
+                g_ii = fg.g_inv[idx][..., 0, 0] if side < 2 \
+                    else fg.g_inv[idx][..., 1, 1]
+
+                c_in  = np.sqrt(GRAVITY * h_in  * g_ii)
                 c_out = np.sqrt(GRAVITY * h_out * g_ii)
-                
-                wave_speed = np.maximum(np.abs(vn) + c_in, np.abs(vn_out) + c_out)
-                
-                # 4.3 SAT Mass
-                sat_mass = sat_coeff * (0.5 * (m_out * vn_out - m_in * vn) - 0.5 * wave_speed * (m_out - m_in))
-                rhs[0, i][idx_2d] -= sat_mass
-                
-                # 4.4 SAT Momentum (Energy Flux)
-                u1_in = u1_cov[idx_2d]; u2_in = u2_cov[idx_2d]
-                
-                # Kinetic Energy In
-                # We need full contraction g^ij * u_i * u_j
-                # It's explicitly written in Notebook
-                KE_in = 0.5 * (u1_in * (u1_in*fg.g_inv[idx_2d][...,0,0] + u2_in*fg.g_inv[idx_2d][...,0,1]) + 
-                               u2_in * (u1_in*fg.g_inv[idx_2d][...,1,0] + u2_in*fg.g_inv[idx_2d][...,1,1]))
-                E_in_val = KE_in + GRAVITY * h_in
-                
-                KE_out = 0.5 * (u1_out_proj * u1_con_out + u2_out_proj * u2_con_out)
-                E_out_val = KE_out + GRAVITY * h_out
-                
-                F_u1_in = E_in_val * nx; F_u1_out = E_out_val * nx 
-                F_u2_in = E_in_val * ny; F_u2_out = E_out_val * ny
-                
-                sat_u1 = sat_coeff * (0.5 * (F_u1_out - F_u1_in) - 0.5 * wave_speed * (u1_out_proj - u1_in)) 
-                sat_u2 = sat_coeff * (0.5 * (F_u2_out - F_u2_in) - 0.5 * wave_speed * (u2_out_proj - u2_in))
-                
-                rhs[1, i][idx_2d] -= sat_u1
-                rhs[2, i][idx_2d] -= sat_u2
-                
+
+                wave_speed = np.maximum(np.abs(vn) + c_in,
+                                        np.abs(vn_out) + c_out)
+
+                # ----------------------------------------------------------
+                # 4.3 SAT mass flux
+                # ----------------------------------------------------------
+                sat_mass = sat_coeff * (
+                    0.5 * (m_out * vn_out - m_in * vn)
+                    - 0.5 * wave_speed * (m_out - m_in)
+                )
+
+                rhs[0, i][idx] -= sat_mass
+
+                # ----------------------------------------------------------
+                # 4.4 SAT momentum flux (energy form)
+                # ----------------------------------------------------------
+                u1_in = u1_cov[idx]
+                u2_in = u2_cov[idx]
+
+                g_inv_loc = fg.g_inv[idx]
+
+                KE_in = 0.5 * (
+                    u1_in * (u1_in * g_inv_loc[..., 0, 0] +
+                            u2_in * g_inv_loc[..., 0, 1]) +
+                    u2_in * (u1_in * g_inv_loc[..., 1, 0] +
+                            u2_in * g_inv_loc[..., 1, 1])
+                )
+
+                E_in  = KE_in + GRAVITY * h_in
+                KE_out = 0.5 * (u1_out * u1_con_out +
+                                u2_out * u2_con_out)
+                E_out = KE_out + GRAVITY * h_out
+
+                F_u1_in  = E_in  * nx
+                F_u1_out = E_out * nx
+                F_u2_in  = E_in  * ny
+                F_u2_out = E_out * ny
+
+                sat_u1 = sat_coeff * (
+                    0.5 * (F_u1_out - F_u1_in)
+                    - 0.5 * wave_speed * (u1_out - u1_in)
+                )
+
+                sat_u2 = sat_coeff * (
+                    0.5 * (F_u2_out - F_u2_in)
+                    - 0.5 * wave_speed * (u2_out - u2_in)
+                )
+
+                rhs[1, i][idx] -= sat_u1
+                rhs[2, i][idx] -= sat_u2
+
         return rhs
 
     def step(self, t: float, state: np.ndarray, dt: float) -> np.ndarray:
