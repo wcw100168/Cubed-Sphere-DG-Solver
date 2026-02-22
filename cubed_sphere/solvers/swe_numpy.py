@@ -547,6 +547,7 @@ class CubedSphereSWENumpy(BaseSolver):
         """
         Run simulation from t_span[0] to t_span[1] starting with initial_state.
         """
+        self.validate_state(initial_state)
         t, t_end = t_span
         state = initial_state.copy()
         dt_algo = self.config.get('dt', None)

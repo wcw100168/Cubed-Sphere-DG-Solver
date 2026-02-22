@@ -23,6 +23,9 @@ If successful, you will see a summary report with **PASS** for all stages.
 | **test_consistency.py** | **Backend Consistency Check**. Forces JAX to use `float64` and runs a single time step on both backends to ensure bit-wise (or near bit-wise) identical results. | Both |
 | **test_swe_integration.py** | **SWE NumPy Test**. Verifies the Shallow Water Equations solver using **Williamson Case 2** (Steady State). Checks for L2 stability and solver liveness (perturbation response). | NumPy |
 | **test_swe_integration_jax.py** | **SWE JAX Test**. Verifies the JAX backend implementation of SWE. Enforces `x64` precision for strict conservation checks (< 1e-14 error tolerance). | JAX |
+| **test_input_validation.py** | Guards against malformed initial states: enforces shape `(n_vars, 6, N+1, N+1)`, finiteness (no NaN/Inf), and numeric dtype. | Both |
+| **test_initialization.py** | Verifies the functional IC builder (`build_from_function`) fills all faces correctly and respects `var_idx` selection. | NumPy |
+| **test_regridding.py** | Ensures scalar Lat-Lon regridding via SciPy maps uniformly-valued grids onto all cubed-sphere LGL nodes without seams or NaNs. | NumPy |
 
 
 ## 🛠️ Running Specific Tests
@@ -50,6 +53,11 @@ python -m unittest tests/test_swe_integration_jax.py
 ### Run Consistency Checks
 ```bash
 python -m unittest tests/test_consistency.py
+
+# Input validation and IC helpers
+python -m pytest tests/test_input_validation.py
+python -m pytest tests/test_initialization.py
+python -m pytest tests/test_regridding.py
 ```
 
 ---

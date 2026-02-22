@@ -439,6 +439,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
         Run simulation from t_span[0] to t_span[1] starting with initial_state.
         Dispatches to JAX or NumPy implementation.
         """
+        self.validate_state(initial_state)
         if self.use_jax:
              return self._solve_jax(t_span, initial_state, callbacks)
         

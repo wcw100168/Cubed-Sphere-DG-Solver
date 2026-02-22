@@ -74,6 +74,40 @@ class BaseSolver(ABC):
         dt = float(cfl * R / (v_max * (N**2)))
         return dt
 
+    def validate_state(self, state) -> None:
+        """Validate user-supplied state arrays before time stepping.
+
+        Enforces exact shape (n_vars, 6, N+1, N+1), checks finiteness, and
+        ensures the input is array-like. Raises ValueError with descriptive
+        guidance so users immediately know how to fix their input.
+        """
+        # Prefer numpy for validation; works for both NumPy and JAX arrays.
+        try:
+            arr = np.asarray(state)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ValueError("State is not array-like or cannot be converted to an array for validation.") from exc
+
+        # Derive expected dimensions
+        n_vars = self.config.get('n_vars', 1)
+        N = self.config.get('N', None)
+        if N is None:
+            raise ValueError("Solver configuration is missing required key 'N' for validation.")
+        expected_shape = (n_vars, 6, N + 1, N + 1)
+
+        if arr.shape != expected_shape:
+            raise ValueError(
+                f"Expected state shape {expected_shape} for n_vars={n_vars} and N={N}, "
+                f"but got {arr.shape}."
+            )
+
+        # Finiteness check (NaN/Inf)
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Initial state contains NaN or Inf values; please clean the data before solving.")
+
+        # Backend/type sanity: ensure arrays are numeric
+        if not np.issubdtype(arr.dtype, np.number):
+            raise ValueError(f"Initial state must be numeric; received dtype {arr.dtype}.")
+
     def _get_max_wave_speed(self, state) -> float:
         """
         Calculate the maximum characteristic wave speed across the domain.

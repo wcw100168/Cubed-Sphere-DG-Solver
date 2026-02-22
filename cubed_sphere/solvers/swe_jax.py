@@ -627,6 +627,7 @@ class CubedSphereSWEJax(BaseSolver):
 
     def solve(self, t_span: Tuple[float, float], initial_state: Union[np.ndarray, Array], callbacks: List[Any] = None) -> np.ndarray:
         t, t_end = t_span
+        self.validate_state(initial_state)
         from cubed_sphere import backend
         state = backend.to_backend(initial_state, jnp)
         

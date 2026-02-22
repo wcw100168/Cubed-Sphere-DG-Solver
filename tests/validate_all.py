@@ -67,6 +67,18 @@ def main():
             "cmd": [python_exe, "-m", "unittest", "tests/test_consistency.py"],
             "desc": "Backend Consistency Unit Tests"
         },
+        {
+            "cmd": [python_exe, "-m", "pytest", "tests/test_input_validation.py"],
+            "desc": "Input Validation Guards"
+        },
+        {
+            "cmd": [python_exe, "-m", "pytest", "tests/test_initialization.py"],
+            "desc": "Functional IC Builder"
+        },
+        {
+            "cmd": [python_exe, "-m", "pytest", "tests/test_regridding.py"],
+            "desc": "Scalar Lat-Lon Regridding"
+        },
 
         # 2. Integration Tests
         {

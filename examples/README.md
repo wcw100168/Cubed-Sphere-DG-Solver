@@ -55,14 +55,23 @@ Standard "Hello World" simulation. Solves the scalar **Advection Equation**, tra
 Scripts designed to demonstrate specific workflows like I/O, custom initialization, and visualization.
 
 ### `demo_custom_input.py`
-Demonstrates how to manually initialize the solver state using custom mathematical functions or raw data arrays, rather than the built-in test cases.
+Demonstrates how to initialize the solver state using a user-supplied callable `f(lon, lat)` via the new IC builder (no manual face loops required).
 - **Key Features**:
-    - **Multi-Solver Support**: Works for both `--solver advection` (scalar input) and `--solver swe` (vector state input).
-    - Shows how to construct the state array `(3, 6, N, N)` for SWE or `(6, N, N)` for Advection.
+    - **Multi-Solver Support**: Works for both `--solver advection` (scalar) and `--solver swe` (mass via `sqrt_g`).
+    - Uses `build_from_function` to fill `(n_vars, 6, N+1, N+1)` safely.
 - **Usage**:
   ```bash
-  # Initialize an SWE simulation with lazy custom inputs
   python examples/demo_custom_input.py --solver swe
+  ```
+
+### `demo_regridding.py`
+Ingests coarse Lat-Lon scalar data (e.g., $5^\circ$ grid) and interpolates it onto the LGL cubed-sphere nodes using SciPy.
+- **Key Features**:
+    - Uses `build_from_latlon_grid` (SciPy RegularGridInterpolator) with longitude wrapping and monotonicity checks.
+    - Produces a Face 0 plot to visualize the remapped field.
+- **Usage**:
+  ```bash
+  python examples/demo_regridding.py
   ```
 
 ### `demo_offline_io.py`
@@ -106,12 +115,4 @@ Explicitly demonstrates using the **JAX backend** for high-performance computing
   ```
 
 ### `demo_vector_regridding.py`
-*Formerly `verify_wind_field.py`*
-Demonstrates how to import external weather data (Lat-Lon grid) onto the Cubed-Sphere grid.
-- **Key Features**:
-    - Performs vector rotation (East/North wind $\to$ Cubed-Sphere local coordinates).
-    - Handles interpolation from standard Lat-Lon grids to the 6-panel structure.
-- **Usage**:
-  ```bash
-  python examples/demo_vector_regridding.py
-  ```
+Deprecated placeholder. Vector regridding support will return in a future release; use `demo_regridding.py` for scalar data.
