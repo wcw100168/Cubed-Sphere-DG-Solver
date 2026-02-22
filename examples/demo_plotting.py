@@ -3,7 +3,6 @@ Demo script for visualizing Cubed Sphere data using global projections (Mollweid
 Requirements: matplotlib, numpy
 """
 import numpy as np
-import matplotlib.pyplot as plt
 import sys
 import os
 
@@ -45,20 +44,8 @@ def main():
     # If u0 is (3, 6, N, N) from SWE, pass u0[0]
     
     try:
-        # plot_cubed_sphere_state is a 3D plotter that uses plt.show(), which blocks.
-        # For a demo, we want to save to file without blocking if possible.
-        # However, the util calls plt.show(). We should just call it and advise user.
-        # Or better: monkeypatch plt.show to save instead? Or just rely on Agg backend.
-        
-        # NOTE: vis.py's plot_cubed_sphere_state requires 'solver' as first arg, not just state.
-        # References 'solver.topology.FACE_MAP' and 'solver.faces'.
-        
-        plot_cubed_sphere_state(solver, u0, title=title)
-        
-        # Attempt to save active figure (plot_cubed_sphere_state creates a figure)
-        plt.savefig(output_file, dpi=150)
+        plot_cubed_sphere_state(solver, u0, title=title, save_path=output_file)
         print(f"✅ Saved {output_file}")
-        
     except Exception as e:
         print(f"❌ Plotting failed: {e}")
         import traceback

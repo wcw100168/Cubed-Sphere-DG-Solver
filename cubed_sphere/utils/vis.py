@@ -104,7 +104,9 @@ def plot_cubed_sphere_state(
     cmap: Any = GREEN_RED_CMAP,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
-    alpha: float = 0.6
+    alpha: float = 0.6,
+    save_path: Optional[str] = None,
+    show: bool = True,
 ):
     """
     Plot the scalar field on the cubed sphere in 3D.
@@ -164,4 +166,8 @@ def plot_cubed_sphere_state(
     ax.set_box_aspect([1, 1, 1])
     
     plt.tight_layout()
-    plt.show()
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        print(f"Plot saved successfully to {save_path}")
+    if show:
+        plt.show()

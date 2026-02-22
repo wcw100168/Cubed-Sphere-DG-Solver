@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import jit, lax, Array, vmap
 import numpy as np
 import dataclasses
+import builtins
 from functools import partial
 from typing import Dict, Tuple, List, Any, Optional, Union
 from cubed_sphere.solvers.base import BaseSolver
@@ -117,15 +118,17 @@ class CubedSphereSWEJax(BaseSolver):
         self.stacked_metrics = self._stack_metrics(self.grid_metrics)
         self.neighbor_indices = self._compute_neighbor_indices()
 
-    def get_initial_condition(self):
-        # Convert JAX faces back to NumPy for initialization logic
+    def get_initial_condition(self, type: str = None, **kwargs):
+        """Generate initial conditions consistent with NumPy backend API."""
+        # Convert JAX faces back to NumPy for shared initialization logic
         faces_np = {}
         for fname, fg in self.faces.items():
             fg_np = dataclasses.replace(fg)
-            # Helper to safely convert if it's jax array
+
             def to_np(arr):
-                return np.array(arr) if hasattr(arr, 'device_buffer') or str(type(arr)).find('jax') != -1 else arr
-            
+                # Convert JAX DeviceArrays to numpy for physics init helper
+                return np.array(arr) if hasattr(arr, 'device_buffer') or 'jax' in str(builtins.type(arr)) else arr
+
             fg_np.g1_vec = to_np(fg.g1_vec)
             fg_np.g2_vec = to_np(fg.g2_vec)
             fg_np.g_inv = to_np(fg.g_inv)
@@ -135,22 +138,22 @@ class CubedSphereSWEJax(BaseSolver):
             
             # --- MANUALLY COPY LON/LAT FROM DYNAMIC ATTRIBUTES ---
             if hasattr(fg, 'lon'):
-                 setattr(fg_np, 'lon', to_np(fg.lon)) # Use setattr for dynamic
+                 setattr(fg_np, 'lon', to_np(fg.lon))
             if hasattr(fg, 'lat'):
                  setattr(fg_np, 'lat', to_np(fg.lat))
             
             faces_np[fname] = fg_np
 
-        case_id = self.config.get('initial_condition', 6)
+        case_id = type if type is not None else self.config.get('initial_condition', 6)
         if isinstance(case_id, int):
             case_id = f"case{case_id}"
-            
-        # Call shared logic
+
+        # Call shared logic; kwargs carry case-specific parameters (e.g., omega, K)
         state_np = get_initial_state(
-            config=self.config, 
-            faces=faces_np, 
-            case_type=case_id, 
-            **self.config
+            config=self.config,
+            faces=faces_np,
+            case_type=case_id,
+            **kwargs
         )
         # Shape: (3, 6, N+1, N+1) -> JAX DeviceArray on return
         return jax.device_put(state_np)
