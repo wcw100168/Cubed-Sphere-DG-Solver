@@ -13,8 +13,10 @@ A high-performance Discontinuous Galerkin (DG) solver for advection-diffusion an
 - **Multi-Variable Support**: Solves systems of equations (e.g., Shallow Water) with `(n_vars, 6, N, N)` state tensors.
 - **High-Order Accuracy**: Implements the Spectral Element Method with Legendre-Gauss-Lobatto (LGL) nodes.
 - **Strict Conservation**: Ensures mass conservation through rigorous weak-form formulation.
+- **Mathematically Exact Geometry**: Uses mathematically exact Equiangular Cubed-Sphere metrics.
+- **Strict Input Validation**: Enforces finiteness checks and rigorous input validation across solvers.
 - **Stateless Design**: Separates physics (solvers) from data (state), facilitating easy integration with optimization or machine learning workflows.
-- **Advanced Regridding**: Includes tools to remap scalar and vector fields between Rectilinear (Lat-Lon) and Cubed-Sphere grids.
+- **Advanced Regridding**: Includes built-in SciPy-based tools to remap scalar and vector fields and ingest standard Lat-Lon datasets onto LGL nodes between Rectilinear (Lat-Lon) and Cubed-Sphere grids.
 
 ## Features & Performance
 
