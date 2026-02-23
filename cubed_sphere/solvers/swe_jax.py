@@ -1,3 +1,4 @@
+import logging
 import jax
 import jax.numpy as jnp
 from jax import jit, lax, Array, vmap
@@ -12,6 +13,8 @@ from cubed_sphere.numerics.spectral import lgl_diff_matrix, lgl_nodes_weights
 from cubed_sphere.physics.initialization import get_initial_state
 from numpy.polynomial.legendre import Legendre
 import math
+
+logger = logging.getLogger(__name__)
 
 # Physics Constants
 def _get_dtype():
@@ -610,11 +613,11 @@ class CubedSphereSWEJax(BaseSolver):
             # Auto-compute CFL-based dt
             cfl = self.config.get('CFL', 0.1)
             dt_algo = self.compute_safe_dt(state, cfl=cfl)
-            print(f"[JAX] Auto-computed Safe dt: {dt_algo:.6f}s (CFL={cfl})")
+            logger.info("[JAX] Auto-computed Safe dt: %.6fs (CFL=%s)", dt_algo, cfl)
         else:
             dt_algo = float(dt_algo)
             
-        print(f"[JAX] Solving SWE: N={self.N}, dt={dt_algo:.4f}s, T_end={t_end}")
+        logger.info("[JAX] Solving SWE: N=%s, dt=%.4fs, T_end=%s", self.N, dt_algo, t_end)
         
         if callbacks:
             s_np = np.array(state)
@@ -624,7 +627,7 @@ class CubedSphereSWEJax(BaseSolver):
             remaining_time = t_end - t
             num_steps = int(math.ceil(remaining_time / dt_algo))
             
-            print(f"[JAX] Fast Path Activated: Compiling {num_steps} steps via lax.scan...")
+            logger.info("[JAX] Fast Path Activated: Compiling %s steps via lax.scan...", num_steps)
             state, t = self.run_simulation_scan(state, t, dt_algo, self.stacked_metrics, self.D, 
                                               self.rk_a, self.rk_b, self.filter_matrix, self.neighbor_indices, num_steps)
             

@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import dataclasses
 from typing import Dict, Tuple, List, Any, Optional
@@ -7,6 +8,8 @@ from cubed_sphere.numerics.spectral import lgl_diff_matrix, lgl_nodes_weights
 from cubed_sphere.physics.initialization import get_initial_state
 from numpy.polynomial.legendre import Legendre
 import math
+
+logger = logging.getLogger(__name__)
 
 # Physics Constants
 EARTH_RADIUS = 6.37122e6
@@ -526,11 +529,11 @@ class CubedSphereSWENumpy(BaseSolver):
         if dt_algo is None:
             cfl = self.config.get('CFL', 0.1)
             dt_algo = self.compute_safe_dt(state, cfl=cfl)
-            print(f"[NumPy] Auto-computed Safe dt: {dt_algo:.6f}s (CFL={cfl})")
+            logger.info("[NumPy] Auto-computed Safe dt: %.6fs (CFL=%s)", dt_algo, cfl)
         else:
             dt_algo = float(dt_algo)
             
-        print(f"Solving SWE (NumPy): N={self.N}, dt={dt_algo:.4f}s, T={t_end}")
+        logger.info("Solving SWE (NumPy): N=%s, dt=%.4fs, T=%s", self.N, dt_algo, t_end)
         
         step_count = 0
         epsilon = 1e-9

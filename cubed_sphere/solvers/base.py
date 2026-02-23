@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
+import logging
 import numpy as np
 from typing import Dict, Any, Tuple, List
+
+logger = logging.getLogger(__name__)
 
 class BaseSolver(ABC):
     """

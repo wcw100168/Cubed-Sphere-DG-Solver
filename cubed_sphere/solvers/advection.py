@@ -1,9 +1,12 @@
+import logging
 import numpy as np
 import dataclasses
 from typing import Dict, Optional, Tuple, List, Any, Callable
 from cubed_sphere.solvers.base import BaseSolver
 from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid
 from cubed_sphere.numerics.spectral import lgl_diff_matrix
+
+logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class AdvectionConfig:
@@ -441,8 +444,8 @@ class CubedSphereAdvectionSolver(BaseSolver):
             # Factor of R was missing in original heuristic if u0 is physical velocity (m/s)
             dt_est = (self.cfg.CFL * self.cfg.R / self.cfg.u0) * (1.0 / self.cfg.N**2)
 
-        print(f"=== Starting Simulation (NumPy) ===")
-        print(f"N={self.cfg.N}, CFL={self.cfg.CFL}, dt={dt_est:.5f}, T_span={t_span}")
+        logger.info("=== Starting Simulation (NumPy) ===")
+        logger.info("N=%s, CFL=%s, dt=%.5f, T_span=%s", self.cfg.N, self.cfg.CFL, dt_est, t_span)
         
         state = initial_state.copy()
         step_count = 0
@@ -476,9 +479,9 @@ class CubedSphereAdvectionSolver(BaseSolver):
             
             # Print occasionally
             if step_count % print_interval == 0:
-                 print(f"Step {step_count}: t={current_time:.4f}")
-                
-        print("=== Simulation Complete ===")
+                logger.info("Step %s: t=%.4f", step_count, current_time)
+
+        logger.info("=== Simulation Complete ===")
         return state
 
     def _solve_jax(self, t_span: Tuple[float, float], initial_state: Any, callbacks: List[Any] = None) -> Any:
@@ -497,7 +500,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
         if self.cfg.dt is not None:
             dt_est = self.cfg.dt
         else:
-             dt_est = (self.cfg.CFL * self.cfg.R / self.cfg.u0) * (1.0 / self.cfg.N**2)
+            dt_est = (self.cfg.CFL * self.cfg.R / self.cfg.u0) * (1.0 / self.cfg.N**2)
 
         def scan_body(carry, _):
             s = carry
@@ -513,8 +516,8 @@ class CubedSphereAdvectionSolver(BaseSolver):
             n_steps = int(duration // dt_est)
             residual = duration - n_steps * dt_est
             
-            print(f"=== Starting Simulation (JAX - Fast Mode) ===")
-            print(f"Total Steps={n_steps}, Residual={residual:.5e}")
+            logger.info("=== Starting Simulation (JAX - Fast Mode) ===")
+            logger.info("Total Steps=%s, Residual=%.5e", n_steps, residual)
             
             if n_steps > 0:
                 state, _ = lax.scan(scan_body, state, None, length=n_steps)
@@ -533,8 +536,8 @@ class CubedSphereAdvectionSolver(BaseSolver):
             # Ensure chunk_dt is at least 1 step
             if chunk_dt < dt_est: chunk_dt = dt_est * 10
             
-            print(f"=== Starting Simulation (JAX - Chunked Mode) ===")
-            print(f"Chunk Size ~ {chunk_dt:.4f}s")
+            logger.info("=== Starting Simulation (JAX - Chunked Mode) ===")
+            logger.info("Chunk Size ~ %.4fs", chunk_dt)
              
             # Initial Callback
             current_state_np = np.array(state)
@@ -548,11 +551,11 @@ class CubedSphereAdvectionSolver(BaseSolver):
                 
                 n_substeps = int(chunk_duration // dt_est)
                 if n_substeps < 1 and chunk_duration > 1e-12:
-                     # Just residual step
-                     n_substeps = 0
-                     residual = chunk_duration
+                    # Just residual step
+                    n_substeps = 0
+                    residual = chunk_duration
                 else:
-                     residual = chunk_duration - n_substeps * dt_est
+                    residual = chunk_duration - n_substeps * dt_est
                 
                 # Run JIT Kernel
                 if n_substeps > 0:
@@ -568,5 +571,5 @@ class CubedSphereAdvectionSolver(BaseSolver):
                 for cb in callbacks:
                     cb(current_time, current_state_np)
                     
-        print("=== Simulation Complete (JAX) ===")
+        logger.info("=== Simulation Complete (JAX) ===")
         return state
