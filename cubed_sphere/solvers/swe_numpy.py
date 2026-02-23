@@ -157,43 +157,13 @@ class CubedSphereSWENumpy(BaseSolver):
         g2_z = fg.Z @ self.D.T * scale
         fg.g1_vec = np.stack([g1_x, g1_y, g1_z], axis=-1)
         fg.g2_vec = np.stack([g2_x, g2_y, g2_z], axis=-1)
-
-        # Exact equiangular covariant metrics and Jacobian
-        A = np.tan(fg.alpha)
-        B = np.tan(fg.beta)
-        cos_a = np.cos(fg.alpha)
-        cos_b = np.cos(fg.beta)
-        rho = np.sqrt(1.0 + A**2 + B**2)
-        rho4 = rho**4
-
-        g11 = (self.R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
-        g22 = (self.R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
-        g12 = -(self.R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
-
-        det = g11 * g22 - g12**2
-        inv_det = 1.0 / det
-
-        fg.g_ij = np.zeros(g11.shape + (2, 2))
-        fg.g_ij[..., 0, 0] = g11
-        fg.g_ij[..., 1, 1] = g22
-        fg.g_ij[..., 0, 1] = g12
-        fg.g_ij[..., 1, 0] = g12
-
-        fg.g_inv = np.zeros(g11.shape + (2, 2))
-        fg.g_inv[..., 0, 0] = g22 * inv_det
-        fg.g_inv[..., 1, 1] = g11 * inv_det
-        fg.g_inv[..., 0, 1] = -g12 * inv_det
-        fg.g_inv[..., 1, 0] = -g12 * inv_det
-
-        fg.sqrt_g = (self.R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
         
-        # Coriolis
-        lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
+        # Coriolis (lon/lat already on FaceGrid)
+        lam, theta = fg.lon, fg.lat
+        if lam is None or theta is None:
+            lam, theta = self.geometry.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
+            fg.lon, fg.lat = lam, theta
         fg.f_coriolis = 2.0 * OMEGA * np.sin(theta)
-        
-        # Store lon/lat for utility
-        fg.lon = lam
-        fg.lat = theta
 
     def _get_boundary_flux_data(self, global_state, face_idx, side):
         """Helper to get neighbor state for Rusanov flux"""

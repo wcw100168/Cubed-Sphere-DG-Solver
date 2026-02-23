@@ -45,12 +45,57 @@ class FaceGrid:
     
     # --- Pre-computed Metric Terms ---
     sqrt_g: Optional[np.ndarray] = None  # Jacobian
+    g_11: Optional[np.ndarray] = None    # Covariant metric g11
+    g_22: Optional[np.ndarray] = None    # Covariant metric g22
+    g_12: Optional[np.ndarray] = None    # Covariant metric g12
+    g_ij: Optional[np.ndarray] = None    # Covariant metric tensor (..,2,2)
+    g_inv: Optional[np.ndarray] = None   # Contravariant metric tensor (..,2,2)
+    g1_vec: Optional[np.ndarray] = None  # Tangent vector 1 (3D)
+    g2_vec: Optional[np.ndarray] = None  # Tangent vector 2 (3D)
+    f_coriolis: Optional[np.ndarray] = None
+    lon: Optional[np.ndarray] = None
+    lat: Optional[np.ndarray] = None
     u1: Optional[np.ndarray] = None      # Contravariant velocity 1 (static wind)
     u2: Optional[np.ndarray] = None      # Contravariant velocity 2 (static wind)
     div_u: Optional[np.ndarray] = None   # Divergence of static wind field
     
     # --- Dynamic State ---
     phi: Optional[np.ndarray] = None     # Scalar field
+
+    def compute_exact_metrics(self, R: float) -> None:
+        """Compute exact equiangular cubed-sphere metric tensors and Jacobian."""
+        A = np.tan(self.alpha)
+        B = np.tan(self.beta)
+        cos_a = np.cos(self.alpha)
+        cos_b = np.cos(self.beta)
+        rho = np.sqrt(1.0 + A**2 + B**2)
+        rho4 = rho**4
+
+        g11 = (R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
+        g22 = (R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
+        g12 = -(R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
+
+        det = g11 * g22 - g12**2
+        inv_det = 1.0 / det
+
+        g_inv = np.zeros(g11.shape + (2, 2))
+        g_inv[..., 0, 0] = g22 * inv_det
+        g_inv[..., 1, 1] = g11 * inv_det
+        g_inv[..., 0, 1] = -g12 * inv_det
+        g_inv[..., 1, 0] = -g12 * inv_det
+
+        g_ij = np.zeros(g11.shape + (2, 2))
+        g_ij[..., 0, 0] = g11
+        g_ij[..., 1, 1] = g22
+        g_ij[..., 0, 1] = g12
+        g_ij[..., 1, 0] = g12
+
+        self.g_11 = g11
+        self.g_22 = g22
+        self.g_12 = g12
+        self.g_inv = g_inv
+        self.g_ij = g_ij
+        self.sqrt_g = (R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
 
 class CubedSphereTopology:
     """
@@ -173,11 +218,11 @@ class CubedSphereEquiangular:
         X, Y, Z = self._xyz_from_xy(x, y, face)
         
         fg = FaceGrid(name=face, alpha=AA, beta=BB, walpha=weights, wbeta=weights,
-                      x=x, y=y, X=X, Y=Y, Z=Z)
-        
-        # Calculate sqrt_g (Jacobian) immediately
-        rho = np.sqrt(1.0 + np.tan(AA)**2 + np.tan(BB)**2)
-        fg.sqrt_g = (self.R**2) / (rho**3 * (np.cos(AA)**2) * (np.cos(BB)**2))
+                  x=x, y=y, X=X, Y=Y, Z=Z)
+
+        # Precompute exact analytic metrics and coordinates
+        fg.lon, fg.lat = self.lonlat_from_xyz(fg.X, fg.Y, fg.Z)
+        fg.compute_exact_metrics(self.R)
         
         return fg
 
@@ -257,3 +302,51 @@ class CubedSphereEquiangular:
         u1 = inv_det * (A[...,1,1]*u_sphere - A[...,0,1]*v_sphere)
         u2 = inv_det * (-A[...,1,0]*u_sphere + A[...,0,0]*v_sphere)
         return u1, u2
+
+
+# ----------------------------------------------------------------------------
+# FaceGrid helper methods
+# ----------------------------------------------------------------------------
+def _compute_exact_metrics_for_face(fg: FaceGrid, R: float) -> None:
+    """Compute exact equiangular cubed-sphere metric tensors and Jacobian."""
+    A = np.tan(fg.alpha)
+    B = np.tan(fg.beta)
+    cos_a = np.cos(fg.alpha)
+    cos_b = np.cos(fg.beta)
+    rho = np.sqrt(1.0 + A**2 + B**2)
+    rho4 = rho**4
+
+    g11 = (R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
+    g22 = (R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
+    g12 = -(R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
+
+    det = g11 * g22 - g12**2
+    inv_det = 1.0 / det
+
+    g_inv = np.zeros(g11.shape + (2, 2))
+    g_inv[..., 0, 0] = g22 * inv_det
+    g_inv[..., 1, 1] = g11 * inv_det
+    g_inv[..., 0, 1] = -g12 * inv_det
+    g_inv[..., 1, 0] = -g12 * inv_det
+
+    g_ij = np.zeros(g11.shape + (2, 2))
+    g_ij[..., 0, 0] = g11
+    g_ij[..., 1, 1] = g22
+    g_ij[..., 0, 1] = g12
+    g_ij[..., 1, 0] = g12
+
+    fg.g_11 = g11
+    fg.g_22 = g22
+    fg.g_12 = g12
+    fg.g_inv = g_inv
+    fg.g_ij = g_ij
+    fg.sqrt_g = (R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
+
+
+def compute_exact_metrics(self: FaceGrid, R: float) -> None:
+    """Attach exact analytic metrics to the face grid."""
+    _compute_exact_metrics_for_face(self, R)
+
+
+# Bind as method of FaceGrid dynamically to avoid altering dataclass signature
+FaceGrid.compute_exact_metrics = compute_exact_metrics

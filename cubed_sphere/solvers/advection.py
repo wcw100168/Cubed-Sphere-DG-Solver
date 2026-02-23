@@ -75,25 +75,10 @@ class CubedSphereAdvectionSolver(BaseSolver):
         Precompute static geometric fields (metrics) and wind velocity.
         """
         for fname, fg in self.faces.items():
-            # --- 1. Exact Equiangular Cubed-Sphere Metrics (covariant) ---
-            A = np.tan(fg.alpha)
-            B = np.tan(fg.beta)
-            cos_a = np.cos(fg.alpha)
-            cos_b = np.cos(fg.beta)
-            rho = np.sqrt(1.0 + A**2 + B**2)
-            rho4 = rho**4
-
-            fg.g_11 = (self.R**2) * (1.0 + B**2) / (rho4 * (cos_a**4))
-            fg.g_22 = (self.R**2) * (1.0 + A**2) / (rho4 * (cos_b**4))
-            fg.g_12 = -(self.R**2) * (A * B) / (rho4 * (cos_a**2) * (cos_b**2))
-
-            # Jacobian (recompute from analytic expression to avoid drift)
-            fg.sqrt_g = (self.R**2) / (rho**3 * (cos_a**2) * (cos_b**2))
-
-            # --- 2. Physical wind (Spherical) ---
+            # --- 1. Physical wind (Spherical) ---
             u_sph, v_sph = self.geometry.solid_body_wind(fg.X, fg.Y, fg.Z, alpha0, u0)
             
-            # --- 3. Contravariant wind ---
+            # --- 2. Contravariant wind ---
             u1, u2 = self.geometry.compute_contravariant_vel(fg, u_sph, v_sph)
             
             if fg.sqrt_g is None:
@@ -102,7 +87,7 @@ class CubedSphereAdvectionSolver(BaseSolver):
             fg.u1 = u1
             fg.u2 = u2
             
-            # --- 4. Divergence (Correction Term) ---
+            # --- 3. Divergence (Correction Term) ---
             term1 = self.D_cpu @ (fg.sqrt_g * u1)
             term2 = (fg.sqrt_g * u2) @ self.D_cpu.T
             fg.div_u = (1.0 / fg.sqrt_g) * (term1 + term2)
