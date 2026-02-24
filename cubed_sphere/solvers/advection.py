@@ -2,6 +2,8 @@ import logging
 import numpy as np
 import dataclasses
 from typing import Dict, Optional, Tuple, List, Any, Callable
+import jax
+import jax.numpy as jnp
 from cubed_sphere.solvers.base import BaseSolver
 from cubed_sphere.geometry.grid import CubedSphereTopology, CubedSphereEquiangular, FaceGrid
 from cubed_sphere.numerics.spectral import lgl_diff_matrix
@@ -121,6 +123,15 @@ class CubedSphereAdvectionSolver(BaseSolver):
             fg.u2 = to_backend(fg.u2, self.xp)
             fg.div_u = to_backend(fg.div_u, self.xp)
 
+        # Stack face-wise tensors for vectorized JAX computation (Structure-of-Arrays)
+        face_order = self.topology.FACE_MAP
+        self.jax_sqrt_g = self.xp.stack([self.faces[fname].sqrt_g for fname in face_order], axis=0)
+        self.jax_u1 = self.xp.stack([self.faces[fname].u1 for fname in face_order], axis=0)
+        self.jax_u2 = self.xp.stack([self.faces[fname].u2 for fname in face_order], axis=0)
+        self.jax_div_u = self.xp.stack([self.faces[fname].div_u for fname in face_order], axis=0)
+        self.jax_walpha = self.xp.stack([self.faces[fname].walpha for fname in face_order], axis=0)
+        self.jax_wbeta = self.xp.stack([self.faces[fname].wbeta for fname in face_order], axis=0)
+
     def get_initial_condition(self, type: str = "gaussian", 
                               func: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
                               h0: float = 1.0, r0: Optional[float] = None) -> np.ndarray:
@@ -224,57 +235,66 @@ class CubedSphereAdvectionSolver(BaseSolver):
         return self._compute_rhs_numpy(t, global_phi)
 
     def _compute_rhs_jax(self, t: float, global_phi: np.ndarray) -> np.ndarray:
-        """ Functional JAX implementation of RHS """
+        """Vectorized JAX implementation of RHS using vmap over faces."""
         xp = self.xp
-        rhs_list = []
         map_factor = 4.0 / np.pi
-        
-        def da(F): return self.D @ F * map_factor
-        def db(F): return F @ self.D.T * map_factor # Verify D.T behavior in JAX
-        
-        # In JAX, we cannot mutate penalty array. 
-        # We calculate terms for each face and stack them.
 
-        for i, fname in enumerate(self.topology.FACE_MAP):
-            fg = self.faces[fname]
-            phi = global_phi[..., i, :, :] # (n_vars, N, N)
-            
-            # --- 1. Volume Integral ---
-            flux = (1.0 / fg.sqrt_g) * (da(fg.sqrt_g * fg.u1 * phi) + db(fg.sqrt_g * fg.u2 * phi))
-            advect = fg.u1 * da(phi) + fg.u2 * db(phi)
-            correction = phi * fg.div_u
+        def da(F):
+            return self.D @ F * map_factor
+
+        def db(F):
+            return F @ self.D.T * map_factor
+
+        # Move face dimension first for vmapping: (6, n_vars, N, N)
+        phi_faces = xp.swapaxes(global_phi, 0, 1)
+
+        # Pre-gather neighbor boundary data for all faces (keeps topology logic centralized)
+        q_west_all = xp.swapaxes(xp.stack([self.topology.get_neighbor_data(global_phi, i, 0) for i in range(6)], axis=1), 0, 1)
+        q_east_all = xp.swapaxes(xp.stack([self.topology.get_neighbor_data(global_phi, i, 1) for i in range(6)], axis=1), 0, 1)
+        q_south_all = xp.swapaxes(xp.stack([self.topology.get_neighbor_data(global_phi, i, 2) for i in range(6)], axis=1), 0, 1)
+        q_north_all = xp.swapaxes(xp.stack([self.topology.get_neighbor_data(global_phi, i, 3) for i in range(6)], axis=1), 0, 1)
+
+        def single_face_rhs(phi, sqrt_g, u1, u2, div_u, walpha, wbeta, q_west, q_east, q_south, q_north):
+            # Volume terms
+            flux = (1.0 / sqrt_g) * (da(sqrt_g * u1 * phi) + db(sqrt_g * u2 * phi))
+            advect = u1 * da(phi) + u2 * db(phi)
+            correction = phi * div_u
             skew_div = 0.5 * (flux + advect - correction)
-            
-            # --- 2. Surface Integral (SAT Penalty) ---
-            # We must compute penalty contribution from all 4 sides essentially "inline" or functional
-            
-            # Helper: SAT penalty
+
             def sat(vn, q_in, q_out, w_metric):
                 flux_diff = 0.5 * (vn - xp.abs(vn)) * (q_in - q_out)
                 return flux_diff / w_metric
 
-            # Calculate penalties for the 4 edges of THIS face
-            # Note: get_neighbor_data now returns (..., edge_len)
-            
-            p_west = sat(-fg.u1[0, :], phi[..., 0, :], self.topology.get_neighbor_data(global_phi, i, 0), fg.walpha[0])
-            p_east = sat(fg.u1[-1, :], phi[..., -1, :], self.topology.get_neighbor_data(global_phi, i, 1), fg.walpha[-1])
-            p_south = sat(-fg.u2[:, 0], phi[..., :, 0], self.topology.get_neighbor_data(global_phi, i, 2), fg.wbeta[0])
-            p_north = sat(fg.u2[:, -1], phi[..., :, -1], self.topology.get_neighbor_data(global_phi, i, 3), fg.wbeta[-1])
-            
-            # Construct penalty field (shape n_vars, N, N)
-            # Start with zeros
+            p_west = sat(-u1[0, :], phi[..., 0, :], q_west, walpha[0])
+            p_east = sat(u1[-1, :], phi[..., -1, :], q_east, walpha[-1])
+            p_south = sat(-u2[:, 0], phi[..., :, 0], q_south, wbeta[0])
+            p_north = sat(u2[:, -1], phi[..., :, -1], q_north, wbeta[-1])
+
             pen = xp.zeros_like(phi)
-            # Add updates. Since phi is (..., N, N), we use .at
             pen = pen.at[..., 0, :].add(p_west)
             pen = pen.at[..., -1, :].add(p_east)
             pen = pen.at[..., :, 0].add(p_south)
             pen = pen.at[..., :, -1].add(p_north)
-            
-            rhs_i = -skew_div + pen
-            rhs_list.append(rhs_i)
-        
-        # Stack on axis 1 (face dim)
-        return xp.stack(rhs_list, axis=1)
+
+            return -skew_div + pen
+
+        # vmap over faces (axis 0 for geometry, axis 1 for phi_faces) while preserving n_vars leading dim inside phi
+        rhs_faces = jax.vmap(single_face_rhs, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))(
+            phi_faces,
+            self.jax_sqrt_g,
+            self.jax_u1,
+            self.jax_u2,
+            self.jax_div_u,
+            self.jax_walpha,
+            self.jax_wbeta,
+            q_west_all,
+            q_east_all,
+            q_south_all,
+            q_north_all,
+        )
+
+        # Swap back to (n_vars, 6, N, N)
+        return xp.swapaxes(rhs_faces, 0, 1)
 
     def _compute_rhs_numpy(self, t: float, global_phi: np.ndarray) -> np.ndarray:
         """
